@@ -120,6 +120,9 @@ const state = {
   admins: [],
   departments: [],
   members: [],
+  memberEvents: [],
+  eventPanel: null,
+  eventForm: {type:"",event_date:"",note:""},
   session: null,
   tab: "journal",
   selectedDept: null,
@@ -151,12 +154,44 @@ async function init(){
 }
 
 async function loadData(){
-  const [depts, mems] = await Promise.all([
+  const [depts, mems, evs] = await Promise.all([
     sb("departments?select=*&order=created_at.asc"),
     sb("members?select=*&order=added_at.desc"),
+    sb("member_events?select=*&order=event_date.desc"),
   ]);
   state.departments = depts;
   state.members = mems;
+  state.memberEvents = evs;
+}
+
+const EVENT_TYPES = [
+  {key:"deces", label:"Décès", icon:"🕊️"},
+  {key:"demenagement", label:"Déménagement", icon:"📦"},
+  {key:"voyage", label:"Voyage", icon:"✈️"},
+  {key:"affectation", label:"Affectation", icon:"📍"},
+  {key:"depart", label:"Départ définitif", icon:"🚪"},
+];
+function eventLabel(key){ const t=EVENT_TYPES.find(t=>t.key===key); return t ? `${t.icon} ${t.label}` : key; }
+function memberEventsFor(id){
+  return state.memberEvents.filter(e=>e.member_id===id).sort((a,b)=> new Date(b.event_date)-new Date(a.event_date));
+}
+function openEventPanel(memberId){ state.eventPanel = memberId; state.eventForm = {type:"",event_date:"",note:""}; render(); }
+function closeEventPanel(){ state.eventPanel = null; render(); }
+async function handleSaveEvent(){
+  const type = document.getElementById("ev-type").value;
+  const date = document.getElementById("ev-date").value;
+  const note = document.getElementById("ev-note").value.trim();
+  if(!type || !date) return;
+  try {
+    await sb("member_events", { method:"POST", body: JSON.stringify([{ member_id: state.eventPanel, type, event_date: date, note, created_by: state.session.name }]) });
+    state.memberEvents = await sb("member_events?select=*&order=event_date.desc");
+    state.eventPanel = null;
+    render();
+  } catch(e){ state.error = "Erreur d'enregistrement : " + e.message; render(); }
+}
+async function handleDeleteEvent(id){
+  try { await sb(`member_events?id=eq.${id}`, { method:"DELETE" }); state.memberEvents = await sb("member_events?select=*&order=event_date.desc"); render(); }
+  catch(e){ state.error = e.message; render(); }
 }
 
 async function handleSetupSubmit(){
@@ -466,6 +501,7 @@ function renderMain(){
 
     ${state.panel==="member" ? renderMemberModal() : ""}
     ${state.panel==="dept" ? renderDeptModal() : ""}
+    ${state.eventPanel ? renderEventModal() : ""}
   `;
 }
 
@@ -484,8 +520,15 @@ function renderMemberList(list){
             ${m.comment?`<span>💬 ${esc(m.comment)}</span>`:""}
           </div>
           <p style="font-size:10px;color:var(--muted2);margin:8px 0 0;">Ajouté par ${esc(m.added_by||"")} · ${timeAgo(m.added_at)}</p>
-          <div style="display:flex;gap:14px;margin-top:10px;">
+          ${memberEventsFor(m.id).length>0 ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(43,30,90,0.08);display:flex;flex-direction:column;gap:6px;">${memberEventsFor(m.id).map(e=>`
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+              <div style="font-size:12px;"><span style="font-weight:600;color:var(--violet)">${eventLabel(e.type)}</span> <span style="color:var(--muted2)">· ${esc(e.event_date)}</span>${e.note?`<br><span style="color:var(--muted)">${esc(e.note)}</span>`:""}</div>
+              <button onclick="handleDeleteEvent('${e.id}')" style="background:none;border:none;color:var(--coral);font-size:11px;flex-shrink:0;">✕</button>
+            </div>
+          `).join("")}</div>` : ""}
+          <div style="display:flex;gap:14px;margin-top:10px;flex-wrap:wrap;">
             <button onclick='openEditMember(${JSON.stringify(m).replace(/'/g,"&#39;")})' style="background:none;border:none;color:var(--teal);font-size:12px;font-weight:600;">✏ Modifier</button>
+            <button onclick="openEventPanel('${m.id}')" style="background:none;border:none;color:var(--violet);font-size:12px;font-weight:600;">📋 Actualité</button>
             ${state.confirmDelete?.type==="member" && state.confirmDelete.id===m.id ?
               `<span style="display:flex;gap:8px;font-size:12px;"><span style="color:var(--muted)">Supprimer ?</span><button onclick="handleDeleteMember('${m.id}')" style="background:none;border:none;color:var(--coral);font-weight:600;">Oui</button><button onclick="state.confirmDelete=null;render();" style="background:none;border:none;color:var(--muted);">Non</button></span>` :
               `<button onclick="state.confirmDelete={type:'member',id:'${m.id}'};render();" style="background:none;border:none;color:var(--coral);font-size:12px;font-weight:600;">🗑 Supprimer</button>`}
@@ -526,6 +569,33 @@ function renderMemberModal(){
           </div>
         </div>
         <div class="modal-footer"><button class="btn-gold" style="width:100%" onclick="handleSaveMember()" ${state.savingPhoto?"disabled":""}>${state.savingPhoto?"Envoi de la photo...":(state.editingMemberId?"Enregistrer":"Ajouter")}</button></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderEventModal(){
+  return `
+    <div class="modal-overlay">
+      <div class="modal-panel glass-strong">
+        <div class="modal-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h2 class="font-display" style="font-size:18px;margin:0;">Nouvelle actualité</h2>
+            <button onclick="closeEventPanel()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div>
+              <label class="label">Type d'événement *</label>
+              <select id="ev-type" style="color:var(--text);background:var(--inputbg);border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:14px;width:100%;font-family:inherit;">
+                <option value="">Choisir...</option>
+                ${EVENT_TYPES.map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}
+              </select>
+            </div>
+            <div><label class="label">Date *</label><input id="ev-date" type="date" /></div>
+            <div><label class="label">Note</label><textarea id="ev-note" rows="3" placeholder="Détails (facultatif)..."></textarea></div>
+          </div>
+        </div>
+        <div class="modal-footer"><button class="btn-teal" style="width:100%" onclick="handleSaveEvent()">Enregistrer</button></div>
       </div>
     </div>
   `;
