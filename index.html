@@ -109,6 +109,17 @@ function gradientFor(name){
   const p = AVATAR_PAIRS[Math.abs(h)%AVATAR_PAIRS.length];
   return `linear-gradient(135deg, ${p[0]}, ${p[1]})`;
 }
+const ADMIN_COLORS = ["#1E3A8A","#1D4ED8","#2563EB","#0EA5E9","#0369A1","#4338CA"];
+function adminColorFor(name){
+  let h=0; const s=name||"";
+  for(let i=0;i<s.length;i++) h = s.charCodeAt(i) + ((h<<5)-h);
+  return ADMIN_COLORS[Math.abs(h)%ADMIN_COLORS.length];
+}
+function hexToRgba(hex, alpha){
+  const c = hex.replace("#","");
+  const r = parseInt(c.substring(0,2),16), g = parseInt(c.substring(2,4),16), b = parseInt(c.substring(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 function timeAgo(iso){
   if(!iso) return "";
   const diff=(Date.now()-new Date(iso).getTime())/1000;
@@ -174,7 +185,7 @@ function showNotificationBanner(item){
   }
   el.innerHTML = `<div class="glass-strong" style="padding:14px 16px;display:flex;align-items:center;gap:10px;border-radius:16px;box-shadow:0 10px 30px rgba(43,30,90,0.25);">
     <span style="font-size:20px;">🔔</span>
-    <div style="flex:1;font-size:13px;line-height:1.4;"><span style="font-weight:700;color:#1E40AF;">${esc(item.by)}</span> ${esc(item.text)}</div>
+    <div style="flex:1;font-size:13px;line-height:1.4;"><span style="font-weight:700;color:${adminColorFor(item.by)};">${esc(item.by)}</span> ${esc(item.text)}</div>
     <button onclick="hideNotificationBanner()" style="background:none;border:none;color:var(--muted);font-size:16px;flex-shrink:0;">✕</button>
   </div>`;
   requestAnimationFrame(()=>{ el.style.top = "12px"; });
@@ -519,17 +530,17 @@ function renderMain(){
   if(state.tab === "journal"){
     body = `<div class="glass" style="overflow:hidden;">
       ${activity.length===0 ? `<div style="text-align:center;padding:60px 16px;"><p class="font-display" style="font-size:18px;margin:0 0 4px;">Rien à signaler</p><p style="color:var(--muted);font-size:14px;margin:0;">Les ajouts et modifications apparaîtront ici.</p></div>` :
-        activity.map(a=>`
+        activity.map(a=>{ const c = adminColorFor(a.by); return `
           <div class="ledger-row" style="padding:14px 16px;display:flex;gap:12px;">
-            <div style="width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${a.isEdit?'rgba(43,196,181,0.15)':'rgba(242,183,5,0.15)'}">
-              <div style="width:8px;height:8px;border-radius:50%;background:${a.isEdit?'var(--teal)':'var(--gold)'}"></div>
+            <div style="width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${hexToRgba(c,0.15)}">
+              <div style="width:8px;height:8px;border-radius:50%;background:${c}"></div>
             </div>
             <div style="flex:1;min-width:0;">
-              <p style="font-size:14px;margin:0;"><span style="font-weight:600;color:${a.isEdit?'var(--teal)':'#1E40AF'}">${esc(a.by)}</span> ${esc(a.text)}</p>
+              <p style="font-size:14px;margin:0;"><span style="font-weight:600;color:${c}">${esc(a.by)}</span> ${esc(a.text)}</p>
               <p style="font-size:11px;color:var(--muted2);margin:3px 0 0;">${timeAgo(a.at)}</p>
             </div>
           </div>
-        `).join("")}
+        `;}).join("")}
     </div>`;
   } else if(state.tab === "rubriques" && !state.selectedDept){
     body = state.departments.length===0 ? `
