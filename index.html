@@ -111,6 +111,8 @@ function gradientFor(name){
 }
 const ADMIN_COLORS = ["#1E3A8A","#1D4ED8","#2563EB","#0EA5E9","#0369A1","#4338CA"];
 function adminColorFor(name){
+  const idx = state.admins.findIndex(a=>a.name===name);
+  if(idx !== -1) return ADMIN_COLORS[idx % ADMIN_COLORS.length];
   let h=0; const s=name||"";
   for(let i=0;i<s.length;i++) h = s.charCodeAt(i) + ((h<<5)-h);
   return ADMIN_COLORS[Math.abs(h)%ADMIN_COLORS.length];
