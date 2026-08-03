@@ -123,6 +123,8 @@ const state = {
   memberEvents: [],
   eventPanel: null,
   eventForm: {type:"",event_date:"",note:""},
+  adminPanel: null, // null | "new" | admin id being edited
+  adminForm: {name:"",code:""},
   session: null,
   tab: "journal",
   selectedDept: null,
@@ -191,6 +193,35 @@ async function handleSaveEvent(){
 }
 async function handleDeleteEvent(id){
   try { await sb(`member_events?id=eq.${id}`, { method:"DELETE" }); state.memberEvents = await sb("member_events?select=*&order=event_date.desc"); render(); }
+  catch(e){ state.error = e.message; render(); }
+}
+
+function openNewAdmin(){
+  if(state.admins.length >= 5){ state.error = "Maximum 4 administrateurs secondaires atteint."; render(); return; }
+  state.adminPanel = "new"; state.adminForm = {name:"",code:""}; render();
+}
+function openEditAdmin(a){ state.adminPanel = a.id; state.adminForm = {name:a.name, code:a.code}; render(); }
+function closeAdminPanel(){ state.adminPanel = null; render(); }
+async function handleSaveAdmin(){
+  const name = document.getElementById("adm-name").value.trim();
+  const code = document.getElementById("adm-code").value.trim();
+  if(!name || !code) return;
+  state.error = "";
+  try {
+    if(state.adminPanel === "new"){
+      await sb("admins", { method:"POST", body: JSON.stringify([{ id:`s_${Date.now()}`, name, code, role:"secondary" }]) });
+    } else {
+      await sb(`admins?id=eq.${state.adminPanel}`, { method:"PATCH", body: JSON.stringify({ name, code }) });
+    }
+    state.admins = await sb("admins?select=*");
+    if(state.session && state.adminPanel===state.session.id) state.session = {...state.session, name, code};
+    state.adminPanel = null;
+    render();
+  } catch(e){ state.error = "Erreur : " + e.message; render(); }
+}
+async function handleDeleteAdmin(id){
+  if(id==="main") return;
+  try { await sb(`admins?id=eq.${id}`, { method:"DELETE" }); state.admins = await sb("admins?select=*"); state.confirmDelete=null; render(); }
   catch(e){ state.error = e.message; render(); }
 }
 
@@ -467,9 +498,18 @@ function renderMain(){
       </div>
       <div>
         <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Administrateurs</h2>
-        <div class="glass" style="overflow:hidden;">
-          ${state.admins.map(a=>`<div class="ledger-row" style="padding:12px 16px;display:flex;align-items:center;gap:8px;"><span style="color:var(--teal)">✓</span><span style="font-size:14px;">${esc(a.name)}</span> <span style="font-size:11px;color:var(--muted2)">(${a.role==='main'?'principal':'secondaire'})</span></div>`).join("")}
+        <div class="glass" style="overflow:hidden;margin-bottom:12px;">
+          ${state.admins.map(a=>`<div class="ledger-row" style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div style="display:flex;align-items:center;gap:8px;min-width:0;"><span style="color:var(--teal)">✓</span><span style="font-size:14px;">${esc(a.name)}</span> <span style="font-size:11px;color:var(--muted2)">(${a.role==='main'?'principal':'secondaire'})</span></div>
+            <div style="display:flex;gap:10px;flex-shrink:0;">
+              <button onclick='openEditAdmin(${JSON.stringify(a).replace(/'/g,"&#39;")})' style="background:none;border:none;color:var(--teal);font-size:12px;font-weight:600;">✏</button>
+              ${a.role!=="main" ? (state.confirmDelete?.type==="admin" && state.confirmDelete.id===a.id ?
+                `<span style="display:flex;gap:6px;font-size:12px;"><button onclick="handleDeleteAdmin('${a.id}')" style="background:none;border:none;color:var(--coral);font-weight:600;">Oui</button><button onclick="state.confirmDelete=null;render();" style="background:none;border:none;color:var(--muted);">Non</button></span>` :
+                `<button onclick="state.confirmDelete={type:'admin',id:'${a.id}'};render();" style="background:none;border:none;color:var(--coral);font-size:12px;">🗑</button>`) : ""}
+            </div>
+          </div>`).join("")}
         </div>
+        ${state.admins.length < 5 ? `<button class="btn-teal" style="width:100%" onclick="openNewAdmin()">+ Ajouter un administrateur</button>` : ""}
       </div>
     `;
   }
@@ -502,6 +542,7 @@ function renderMain(){
     ${state.panel==="member" ? renderMemberModal() : ""}
     ${state.panel==="dept" ? renderDeptModal() : ""}
     ${state.eventPanel ? renderEventModal() : ""}
+    ${state.adminPanel ? renderAdminModal() : ""}
   `;
 }
 
@@ -596,6 +637,28 @@ function renderEventModal(){
           </div>
         </div>
         <div class="modal-footer"><button class="btn-teal" style="width:100%" onclick="handleSaveEvent()">Enregistrer</button></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAdminModal(){
+  const f = state.adminForm;
+  const isNew = state.adminPanel === "new";
+  return `
+    <div class="modal-overlay">
+      <div class="modal-panel glass-strong">
+        <div class="modal-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h2 class="font-display" style="font-size:18px;margin:0;">${isNew?"Nouvel administrateur":"Modifier l'administrateur"}</h2>
+            <button onclick="closeAdminPanel()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div><label class="label">Nom *</label><input id="adm-name" value="${esc(f.name)}" placeholder="Nom de l'administrateur" /></div>
+            <div><label class="label">Code d'accès *</label><input id="adm-code" value="${esc(f.code)}" placeholder="Code" /></div>
+          </div>
+        </div>
+        <div class="modal-footer"><button class="btn-teal" style="width:100%" onclick="handleSaveAdmin()">${isNew?"Ajouter":"Enregistrer"}</button></div>
       </div>
     </div>
   `;
