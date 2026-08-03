@@ -128,6 +128,7 @@ const state = {
   eventForm: {type:"",event_date:"",note:""},
   adminPanel: null, // null | "new" | admin id being edited
   adminForm: {name:"",code:""},
+  notifiedIds: null,
   session: null,
   tab: "journal",
   selectedDept: null,
@@ -144,6 +145,72 @@ const state = {
 };
 
 let pendingPhotoFile = null;
+let pollTimer = null;
+let bannerTimeout = null;
+
+function playNotificationSound(){
+  try{
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.type = "sine"; o.frequency.value = 880;
+    o.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+0.4);
+    o.start(); o.stop(ctx.currentTime+0.45);
+    setTimeout(()=>{ try{ ctx.close(); }catch(e){} }, 600);
+  } catch(e){}
+}
+
+function showNotificationBanner(item){
+  let el = document.getElementById("notif-banner");
+  if(!el){
+    el = document.createElement("div");
+    el.id = "notif-banner";
+    el.style.position = "fixed"; el.style.top = "-120px"; el.style.left = "16px"; el.style.right = "16px";
+    el.style.maxWidth = "640px"; el.style.margin = "0 auto"; el.style.zIndex = "999"; el.style.transition = "top 0.4s ease";
+    document.body.appendChild(el);
+  }
+  el.innerHTML = `<div class="glass-strong" style="padding:14px 16px;display:flex;align-items:center;gap:10px;border-radius:16px;box-shadow:0 10px 30px rgba(43,30,90,0.25);">
+    <span style="font-size:20px;">🔔</span>
+    <div style="flex:1;font-size:13px;line-height:1.4;"><span style="font-weight:700;color:#B8890A;">${esc(item.by)}</span> ${esc(item.text)}</div>
+    <button onclick="hideNotificationBanner()" style="background:none;border:none;color:var(--muted);font-size:16px;flex-shrink:0;">✕</button>
+  </div>`;
+  requestAnimationFrame(()=>{ el.style.top = "12px"; });
+  clearTimeout(bannerTimeout);
+  bannerTimeout = setTimeout(hideNotificationBanner, 6000);
+}
+function hideNotificationBanner(){
+  const el = document.getElementById("notif-banner");
+  if(el) el.style.top = "-120px";
+}
+
+function startPolling(){
+  if(pollTimer) return;
+  pollTimer = setInterval(async () => {
+    if(state.phase !== "app") return;
+    try {
+      const [depts, mems, evs] = await Promise.all([
+        sb("departments?select=*&order=created_at.asc"),
+        sb("members?select=*&order=added_at.desc"),
+        sb("member_events?select=*&order=event_date.desc"),
+      ]);
+      state.departments = depts; state.members = mems; state.memberEvents = evs;
+      const activity = computeActivity();
+      if(state.notifiedIds){
+        const newOnes = activity.filter(a => !state.notifiedIds.has(a.id) && a.by !== state.session.name);
+        if(newOnes.length > 0){
+          showNotificationBanner(newOnes[0]);
+          playNotificationSound();
+        }
+      }
+      state.notifiedIds = new Set(activity.map(a=>a.id));
+      const modalOpen = state.panel || state.eventPanel || state.adminPanel;
+      if(!modalOpen) render();
+    } catch(e){}
+  }, 20000);
+}
+function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
 
 const app = document.getElementById("app");
 
@@ -258,13 +325,15 @@ async function handleLogin(){
     if(!found){ state.error = "Code invalide."; render(); return; }
     state.session = found;
     await loadData();
+    state.notifiedIds = new Set(computeActivity().map(a=>a.id));
+    startPolling();
     state.phase = "app";
     state.tab = "journal";
     render();
   } catch(e){ state.error = "Erreur de connexion : " + e.message; render(); }
 }
 
-function logout(){ state.session = null; state.phase = "login"; render(); }
+function logout(){ stopPolling(); state.session = null; state.phase = "login"; render(); }
 
 async function markSeen(){
   if(!state.session) return;
