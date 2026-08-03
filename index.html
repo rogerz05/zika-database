@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -33,7 +32,8 @@
   .btn-teal{background:linear-gradient(135deg,var(--teal),var(--blue));color:#0D2B28;font-weight:700;border:none;border-radius:16px;padding:12px;font-size:14px;}
   .container{max-width:640px;margin:0 auto;padding:24px 16px 130px;}
   .label{font-size:11px;color:var(--muted);display:block;margin-bottom:5px;}
-  .avatar{width:44px;height:44px;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#16112A;font-weight:700;font-size:13px;flex-shrink:0;}
+  .avatar{width:44px;height:44px;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#16112A;font-weight:700;font-size:13px;flex-shrink:0;overflow:hidden;}
+  .avatar img{width:100%;height:100%;object-fit:cover;}
   .fab{position:fixed;bottom:96px;right:24px;width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:none;box-shadow:0 8px 24px rgba(242,183,5,0.4);font-size:26px;color:#16112A;background:linear-gradient(135deg,var(--gold),var(--coral));}
   .nav{position:fixed;bottom:16px;left:16px;right:16px;max-width:640px;margin:0 auto;border-radius:999px;display:flex;padding:6px;}
   .nav button{flex:1;background:none;border:none;padding:10px 0;border-radius:999px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;font-weight:600;color:var(--muted2);}
@@ -46,6 +46,9 @@
   ::selection{background:var(--gold);color:#16112A;}
   .spin{animation:spin 1s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
+  .photo-picker{width:88px;height:88px;border-radius:20px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:var(--inputbg);border:1.5px dashed var(--border);flex-shrink:0;position:relative;}
+  .photo-picker img{width:100%;height:100%;object-fit:cover;}
+  .photo-picker input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;}
 </style>
 </head>
 <body>
@@ -54,6 +57,7 @@
 <script>
 const SUPABASE_URL = "https://jtqgwnxljwdibzitatux.supabase.co";
 const ANON_KEY = "sb_publishable_EPFVRKAf6H_3C3sZW3nHzg_y94crX28";
+const PHOTO_BUCKET = "photos-membres1";
 
 async function sb(path, opts={}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -72,6 +76,25 @@ async function sb(path, opts={}) {
   }
   const text = await res.text();
   return text ? JSON.parse(text) : null;
+}
+
+async function uploadMemberPhoto(file){
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `member_${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`;
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${PHOTO_BUCKET}/${path}`, {
+    method: "POST",
+    headers: {
+      "apikey": ANON_KEY,
+      "Authorization": `Bearer ${ANON_KEY}`,
+      "Content-Type": file.type || "application/octet-stream"
+    },
+    body: file
+  });
+  if(!res.ok){
+    const txt = await res.text().catch(()=> "");
+    throw new Error(`Échec de l'envoi de la photo : ${txt}`);
+  }
+  return `${SUPABASE_URL}/storage/v1/object/public/${PHOTO_BUCKET}/${path}`;
 }
 
 const AVATAR_PAIRS = [["#F2B705","#FF6F5E"],["#2BC4B5","#5FA8D3"],["#8B7FD6","#FF6F5E"],["#5FA8D3","#2BC4B5"],["#FF6F5E","#F2B705"]];
@@ -103,13 +126,16 @@ const state = {
   query: "",
   panel: null, // 'member' | 'dept' | null
   editingMemberId: null,
-  memberForm: {name:"",role:"",location:"",contact:"",comment:""},
+  memberForm: {name:"",role:"",location:"",contact:"",comment:"",photoUrl:""},
   newDeptName: "",
   confirmDelete: null,
   error: "",
+  savingPhoto: false,
   setupSecondaries: [{name:"",code:""},{name:"",code:""},{name:"",code:""},{name:"",code:""}],
   loginCode: "",
 };
+
+let pendingPhotoFile = null;
 
 const app = document.getElementById("app");
 
@@ -203,23 +229,38 @@ function deptMembers(deptId){
 }
 
 function openNewMember(deptId){
-  state.memberForm = {name:"",role:"",location:"",contact:"",comment:""};
+  state.memberForm = {name:"",role:"",location:"",contact:"",comment:"",photoUrl:""};
+  pendingPhotoFile = null;
   state.editingMemberId = null;
   state.selectedDept = deptId;
   state.panel = "member";
   render();
 }
 function openEditMember(m){
-  state.memberForm = { name:m.name, role:m.role||"", location:m.location||"", contact:m.contact||"", comment:m.comment||"" };
+  state.memberForm = { name:m.name, role:m.role||"", location:m.location||"", contact:m.contact||"", comment:m.comment||"", photoUrl:m.photo_url||"" };
+  pendingPhotoFile = null;
   state.editingMemberId = m.id;
   state.panel = "member";
   render();
 }
-function closePanel(){ state.panel = null; render(); }
+function closePanel(){ pendingPhotoFile = null; state.panel = null; render(); }
+
+function onPhotoSelected(event){
+  const file = event.target.files && event.target.files[0];
+  if(!file) return;
+  pendingPhotoFile = file;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const box = document.getElementById("mf-photo-box");
+    if(box) box.innerHTML = `<img src="${reader.result}" /><input type="file" accept="image/*" onchange="onPhotoSelected(event)" />`;
+  };
+  reader.readAsDataURL(file);
+}
 
 async function handleSaveMember(){
   const name = document.getElementById("mf-name").value.trim();
   if(!name) return;
+  state.error = "";
   const form = {
     name,
     role: document.getElementById("mf-role").value.trim(),
@@ -228,15 +269,23 @@ async function handleSaveMember(){
     comment: document.getElementById("mf-comment").value.trim(),
   };
   try {
+    if(pendingPhotoFile){
+      state.savingPhoto = true; render();
+      form.photo_url = await uploadMemberPhoto(pendingPhotoFile);
+      state.savingPhoto = false;
+    } else if(state.editingMemberId){
+      form.photo_url = state.memberForm.photoUrl || null;
+    }
     if(state.editingMemberId){
       await sb(`members?id=eq.${state.editingMemberId}`, { method:"PATCH", body: JSON.stringify({ ...form, updated_by: state.session.name, updated_at: new Date().toISOString() }) });
     } else {
       await sb("members", { method:"POST", body: JSON.stringify([{ ...form, dept_id: state.selectedDept, added_by: state.session.name }]) });
     }
+    pendingPhotoFile = null;
     await loadData();
     state.panel = null;
     render();
-  } catch(e){ state.error = "Erreur d'enregistrement : " + e.message; render(); }
+  } catch(e){ state.savingPhoto = false; state.error = "Erreur d'enregistrement : " + e.message; render(); }
 }
 
 async function handleDeleteMember(id){
@@ -425,7 +474,7 @@ function renderMemberList(list){
   return `<div style="display:flex;flex-direction:column;gap:10px;">${list.map(m=>`
     <div class="glass" style="padding:16px;">
       <div style="display:flex;align-items:flex-start;gap:12px;">
-        <div class="avatar" style="border-radius:16px;background:${gradientFor(m.name)}">${initials(m.name)}</div>
+        <div class="avatar" style="border-radius:16px;background:${gradientFor(m.name)}">${m.photo_url ? `<img src="${esc(m.photo_url)}" />` : initials(m.name)}</div>
         <div style="flex:1;min-width:0;">
           <h3 class="font-display" style="font-size:15px;margin:0;">${esc(m.name)}</h3>
           ${m.role?`<p style="font-size:12px;color:#B8890A;margin:2px 0 0;">${esc(m.role)}</p>`:""}
@@ -462,6 +511,13 @@ function renderMemberModal(){
             <button onclick="closePanel()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
           </div>
           <div style="display:flex;flex-direction:column;gap:12px;">
+            <div style="display:flex;align-items:center;gap:14px;">
+              <div class="photo-picker" id="mf-photo-box">
+                ${f.photoUrl ? `<img src="${esc(f.photoUrl)}" />` : `<span style="font-size:24px;color:var(--muted2)">📷</span>`}
+                <input type="file" accept="image/*" onchange="onPhotoSelected(event)" />
+              </div>
+              <div style="font-size:12px;color:var(--muted);">Touche l'icône pour ${f.photoUrl?"changer la":"ajouter une"} photo.</div>
+            </div>
             <div><label class="label">Nom *</label><input id="mf-name" value="${esc(f.name)}" placeholder="Nom complet" /></div>
             <div><label class="label">Fonction dans l'église</label><input id="mf-role" value="${esc(f.role)}" placeholder="Ex : Diacre, Choriste..." /></div>
             <div><label class="label">Lieu d'habitation</label><input id="mf-location" value="${esc(f.location)}" placeholder="Ville, quartier..." /></div>
@@ -469,7 +525,7 @@ function renderMemberModal(){
             <div><label class="label">Commentaire</label><textarea id="mf-comment" rows="3" placeholder="Note libre...">${esc(f.comment)}</textarea></div>
           </div>
         </div>
-        <div class="modal-footer"><button class="btn-gold" style="width:100%" onclick="handleSaveMember()">${state.editingMemberId?"Enregistrer":"Ajouter"}</button></div>
+        <div class="modal-footer"><button class="btn-gold" style="width:100%" onclick="handleSaveMember()" ${state.savingPhoto?"disabled":""}>${state.savingPhoto?"Envoi de la photo...":(state.editingMemberId?"Enregistrer":"Ajouter")}</button></div>
       </div>
     </div>
   `;
@@ -495,4 +551,4 @@ function renderDeptModal(){
 init();
 </script>
 </body>
-</html>
+  </html>
