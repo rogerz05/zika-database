@@ -41,6 +41,12 @@
   .btn-gold{background:linear-gradient(135deg,var(--gold),var(--gold2));color:#16112A;font-weight:700;border:none;border-radius:16px;padding:13px;font-size:14px;box-shadow:0 8px 24px rgba(242,183,5,0.3);}
   .btn-teal{background:linear-gradient(135deg,var(--teal),var(--blue));color:#0D2B28;font-weight:700;border:none;border-radius:16px;padding:12px;font-size:14px;}
   .container{max-width:640px;margin:0 auto;padding:24px 16px 130px;}
+  @media(min-width:900px){
+    body{padding-bottom:0;}
+    .container{max-width:820px;padding:32px 24px 130px;}
+    .nav{max-width:480px;}
+    .modal-panel{max-width:520px;}
+  }
   .label{font-size:11px;color:var(--muted);display:block;margin-bottom:5px;}
   .avatar{width:44px;height:44px;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#16112A;font-weight:700;font-size:13px;flex-shrink:0;overflow:hidden;}
   .avatar img{width:100%;height:100%;object-fit:cover;}
@@ -163,7 +169,9 @@ const state = {
   query: "",
   panel: null, // 'member' | 'dept' | null
   editingMemberId: null,
-  memberForm: {name:"",role:"",location:"",contact:"",comment:"",photoUrl:""},
+  memberForm: {name:"",role:"",location:"",contact:"",comment:"",photoUrl:"",gender:""},
+  attendance: [],
+  attendanceForm: {date:"", men:"", women:""},
   newDeptName: "",
   confirmDelete: null,
   error: "",
@@ -254,14 +262,16 @@ async function init(){
 }
 
 async function loadData(){
-  const [depts, mems, evs] = await Promise.all([
+  const [depts, mems, evs, att] = await Promise.all([
     sb("departments?select=*&order=created_at.asc"),
     sb("members?select=*&order=added_at.desc"),
     sb("member_events?select=*&order=event_date.desc"),
+    sb("attendance?select=*&order=attendance_date.desc"),
   ]);
   state.departments = depts;
   state.members = mems;
   state.memberEvents = evs;
+  state.attendance = att;
 }
 
 const EVENT_TYPES = [
@@ -291,6 +301,73 @@ async function handleSaveEvent(){
 }
 async function handleDeleteEvent(id){
   try { await sb(`member_events?id=eq.${id}`, { method:"DELETE" }); state.memberEvents = await sb("member_events?select=*&order=event_date.desc"); render(); }
+  catch(e){ state.error = e.message; render(); }
+}
+
+// ---------------- STATISTIQUES ----------------
+function uniqueMembers(){
+  const seen = new Map();
+  for(const m of state.members){
+    const key = (m.name||"").trim().toLowerCase();
+    if(!key) continue;
+    if(!seen.has(key)) seen.set(key, m);
+  }
+  return Array.from(seen.values());
+}
+function genderStats(){
+  const list = uniqueMembers();
+  const total = list.length;
+  let men = 0, women = 0, unknown = 0;
+  for(const m of list){
+    if(m.gender === "homme") men++;
+    else if(m.gender === "femme") women++;
+    else unknown++;
+  }
+  return { total, men, women, unknown,
+    menPct: total? Math.round(men/total*100) : 0,
+    womenPct: total? Math.round(women/total*100) : 0,
+    unknownPct: total? Math.round(unknown/total*100) : 0 };
+}
+function locationStats(){
+  const list = uniqueMembers();
+  const total = list.length;
+  const counts = {};
+  for(const m of list){
+    const loc = (m.location||"").trim() || "Non précisé";
+    counts[loc] = (counts[loc]||0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([location,count])=>({ location, count, pct: total? Math.round(count/total*100) : 0 }))
+    .sort((a,b)=>b.count-a.count);
+}
+
+// ---------------- PRÉSENCE AU CULTE ----------------
+function openAttendanceForm(){
+  const today = new Date().toISOString().slice(0,10);
+  state.attendanceForm = { date: today, men: "", women: "" };
+  state.panel = "attendance";
+  render();
+}
+async function handleSaveAttendance(){
+  const date = document.getElementById("att-date").value;
+  const men = parseInt(document.getElementById("att-men").value || "0", 10);
+  const women = parseInt(document.getElementById("att-women").value || "0", 10);
+  if(!date) return;
+  state.error = "";
+  try {
+    const existing = state.attendance.find(a=>a.attendance_date===date);
+    if(existing){
+      await sb(`attendance?id=eq.${existing.id}`, { method:"PATCH", body: JSON.stringify({ men_count: men, women_count: women, recorded_by: state.session.name }) });
+    } else {
+      await sb("attendance", { method:"POST", body: JSON.stringify([{ attendance_date: date, men_count: men, women_count: women, recorded_by: state.session.name }]) });
+    }
+    state.attendance = await sb("attendance?select=*&order=attendance_date.desc");
+    state.panel = null;
+    render();
+  } catch(e){ state.error = "Erreur d'enregistrement : " + e.message; render(); }
+}
+async function handleDeleteAttendance(id){
+  try { await sb(`attendance?id=eq.${id}`, { method:"DELETE" }); state.attendance = await sb("attendance?select=*&order=attendance_date.desc"); render(); }
   catch(e){ state.error = e.message; render(); }
 }
 
@@ -395,7 +472,7 @@ function deptMembers(deptId){
 }
 
 function openNewMember(deptId){
-  state.memberForm = {name:"",role:"",location:"",contact:"",comment:"",photoUrl:""};
+  state.memberForm = {name:"",role:"",location:"",contact:"",comment:"",photoUrl:"",gender:""};
   pendingPhotoFile = null;
   state.editingMemberId = null;
   state.selectedDept = deptId;
@@ -403,7 +480,7 @@ function openNewMember(deptId){
   render();
 }
 function openEditMember(m){
-  state.memberForm = { name:m.name, role:m.role||"", location:m.location||"", contact:m.contact||"", comment:m.comment||"", photoUrl:m.photo_url||"" };
+  state.memberForm = { name:m.name, role:m.role||"", location:m.location||"", contact:m.contact||"", comment:m.comment||"", photoUrl:m.photo_url||"", gender:m.gender||"" };
   pendingPhotoFile = null;
   state.editingMemberId = m.id;
   state.panel = "member";
@@ -433,6 +510,7 @@ async function handleSaveMember(){
     location: document.getElementById("mf-location").value.trim(),
     contact: document.getElementById("mf-contact").value.trim(),
     comment: document.getElementById("mf-comment").value.trim(),
+    gender: document.getElementById("mf-gender").value,
   };
   try {
     if(pendingPhotoFile){
@@ -584,7 +662,69 @@ function renderMain(){
       <div id="member-list">${renderMemberList(list)}</div>
     `;
   } else if(state.tab === "admin" && isMain){
+    const gStats = genderStats();
+    const lStats = locationStats();
     body = `
+      <div style="margin-bottom:20px;">
+        <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Statistiques</h2>
+        <div class="glass" style="padding:16px;margin-bottom:12px;">
+          <p style="font-size:13px;color:var(--muted);margin:0 0 8px;">Total de membres uniques (toutes rubriques confondues)</p>
+          <p class="font-display" style="font-size:32px;margin:0;color:#B8890A;">${gStats.total}</p>
+        </div>
+        <div class="glass" style="padding:16px;margin-bottom:12px;">
+          <p style="font-size:13px;color:var(--muted);margin:0 0 12px;">Répartition Hommes / Femmes</p>
+          <div style="display:flex;height:14px;border-radius:8px;overflow:hidden;margin-bottom:10px;background:var(--inputbg);">
+            <div style="width:${gStats.menPct}%;background:linear-gradient(90deg,var(--blue),var(--teal));"></div>
+            <div style="width:${gStats.womenPct}%;background:linear-gradient(90deg,var(--coral),var(--violet));"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);flex-wrap:wrap;gap:6px;">
+            <span>🔵 Hommes : ${gStats.men} (${gStats.menPct}%)</span>
+            <span>🟣 Femmes : ${gStats.women} (${gStats.womenPct}%)</span>
+          </div>
+          ${gStats.unknown>0?`<p style="font-size:11px;color:var(--muted2);margin:8px 0 0;">${gStats.unknown} sans sexe précisé</p>`:""}
+        </div>
+        <div class="glass" style="padding:16px;">
+          <p style="font-size:13px;color:var(--muted);margin:0 0 12px;">Répartition par lieu d'habitation</p>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            ${lStats.map(l=>`
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;"><span>${esc(l.location)}</span><span style="color:var(--muted)">${l.count} · ${l.pct}%</span></div>
+                <div style="height:8px;border-radius:6px;background:var(--inputbg);overflow:hidden;"><div style="width:${l.pct}%;height:100%;background:linear-gradient(90deg,var(--gold),var(--gold2));"></div></div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      </div>
+      <div style="margin-bottom:20px;">
+        <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Présence au culte du dimanche</h2>
+        <button class="btn-gold" style="width:100%;margin-bottom:12px;" onclick="openAttendanceForm()">+ Enregistrer une présence</button>
+        <div class="glass" style="overflow:hidden;">
+          ${state.attendance.length===0 ? `<p style="padding:16px;color:var(--muted);font-size:14px;margin:0;">Aucune présence enregistrée.</p>` :
+            state.attendance.map(a=>{
+              const total = a.men_count + a.women_count;
+              const menPct = total? Math.round(a.men_count/total*100) : 0;
+              const womenPct = total? 100-menPct : 0;
+              return `
+              <div class="ledger-row" style="padding:12px 16px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                  <span style="font-size:13px;font-weight:600;">${esc(a.attendance_date)}</span>
+                  <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:12px;color:var(--muted);">Total : ${total}</span>
+                    <button onclick="handleDeleteAttendance('${a.id}')" style="background:none;border:none;color:var(--coral);font-size:12px;">🗑</button>
+                  </div>
+                </div>
+                <div style="display:flex;height:10px;border-radius:6px;overflow:hidden;background:var(--inputbg);">
+                  <div style="width:${menPct}%;background:var(--blue);"></div>
+                  <div style="width:${womenPct}%;background:var(--coral);"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted2);margin-top:3px;">
+                  <span>🔵 ${a.men_count} hommes</span>
+                  <span>🔴 ${a.women_count} femmes</span>
+                </div>
+              </div>
+            `;}).join("")}
+        </div>
+      </div>
       <div style="margin-bottom:20px;">
         <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Rubriques</h2>
         <div class="glass" style="overflow:hidden;">
@@ -646,6 +786,7 @@ function renderMain(){
 
     ${state.panel==="member" ? renderMemberModal() : ""}
     ${state.panel==="dept" ? renderDeptModal() : ""}
+    ${state.panel==="attendance" ? renderAttendanceModal() : ""}
     ${state.eventPanel ? renderEventModal() : ""}
     ${state.adminPanel ? renderAdminModal() : ""}
     ${state.detailMember ? renderMemberDetailModal() : ""}
@@ -755,6 +896,13 @@ function renderMemberModal(){
               <div style="font-size:12px;color:var(--muted);">Touche l'icône pour ${f.photoUrl?"changer la":"ajouter une"} photo.</div>
             </div>
             <div><label class="label">Nom *</label><input id="mf-name" value="${esc(f.name)}" placeholder="Nom complet" /></div>
+            <div><label class="label">Sexe</label>
+              <select id="mf-gender" style="color:var(--text);background:var(--inputbg);border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:14px;width:100%;font-family:inherit;">
+                <option value="" ${!f.gender?"selected":""}>Non précisé</option>
+                <option value="homme" ${f.gender==="homme"?"selected":""}>Homme</option>
+                <option value="femme" ${f.gender==="femme"?"selected":""}>Femme</option>
+              </select>
+            </div>
             <div><label class="label">Fonction dans l'église</label><input id="mf-role" value="${esc(f.role)}" placeholder="Ex : Diacre, Choriste..." /></div>
             <div><label class="label">Lieu d'habitation</label><input id="mf-location" value="${esc(f.location)}" placeholder="Ville, quartier..." /></div>
             <div><label class="label">Contact</label><input id="mf-contact" value="${esc(f.contact)}" placeholder="Téléphone" /></div>
@@ -811,6 +959,29 @@ function renderAdminModal(){
           </div>
         </div>
         <div class="modal-footer"><button class="btn-teal" style="width:100%" onclick="handleSaveAdmin()">${isNew?"Ajouter":"Enregistrer"}</button></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAttendanceModal(){
+  const f = state.attendanceForm;
+  return `
+    <div class="modal-overlay">
+      <div class="modal-panel glass-strong">
+        <div class="modal-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h2 class="font-display" style="font-size:18px;margin:0;">Présence au culte</h2>
+            <button onclick="closePanel()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div><label class="label">Date *</label><input id="att-date" type="date" value="${esc(f.date)}" /></div>
+            <div><label class="label">Nombre d'hommes</label><input id="att-men" type="number" min="0" value="${esc(f.men)}" placeholder="0" /></div>
+            <div><label class="label">Nombre de femmes</label><input id="att-women" type="number" min="0" value="${esc(f.women)}" placeholder="0" /></div>
+            <p style="font-size:11px;color:var(--muted2);margin:0;">Si une présence existe déjà pour cette date, elle sera mise à jour.</p>
+          </div>
+        </div>
+        <div class="modal-footer"><button class="btn-gold" style="width:100%" onclick="handleSaveAttendance()">Enregistrer</button></div>
       </div>
     </div>
   `;
