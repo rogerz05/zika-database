@@ -600,7 +600,7 @@ function renderLogin(){
       <p style="font-size:12px;color:var(--muted);margin:0 0 24px;text-align:center;">Temple des Vainqueurs — San Pédro, Colas</p>
       <div class="glass" style="padding:14px;display:flex;align-items:center;gap:8px;margin-bottom:12px;">
         <span>🔑</span>
-        <input id="login-code" type="password" placeholder="Entre ton code d'accès" style="background:transparent;border:none;padding:4px;" />
+        <input id="login-code" type="text" autocomplete="off" placeholder="Entre ton code d'accès" style="background:transparent;border:none;padding:4px;-webkit-text-security:disc;" />
       </div>
       ${state.error ? `<p style="color:var(--coral);font-size:13px;margin:0 0 12px;text-align:center;">${esc(state.error)}</p>` : ""}
       <button class="btn-gold" style="width:100%" onclick="handleLogin()">Entrer</button>
