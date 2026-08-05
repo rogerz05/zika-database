@@ -661,7 +661,7 @@ function renderMain(){
       </div>
       <div id="member-list">${renderMemberList(list)}</div>
     `;
-  } else if(state.tab === "admin" && isMain){
+  } else if(state.tab === "admin"){
     const gStats = genderStats();
     const lStats = locationStats();
     body = `
@@ -725,6 +725,7 @@ function renderMain(){
             `;}).join("")}
         </div>
       </div>
+      ${isMain ? `
       <div style="margin-bottom:20px;">
         <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Rubriques</h2>
         <div class="glass" style="overflow:hidden;">
@@ -753,6 +754,7 @@ function renderMain(){
         </div>
         ${state.admins.length < 5 ? `<button class="btn-teal" style="width:100%" onclick="openNewAdmin()">+ Ajouter un administrateur</button>` : ""}
       </div>
+      ` : ""}
     `;
   }
 
@@ -781,7 +783,7 @@ function renderMain(){
         🔔 ${unseen>0?`<span style="position:absolute;top:6px;right:32%;width:8px;height:8px;border-radius:50%;background:var(--coral)"></span>`:""}<span>Journal</span>
       </button>
       <button class="${state.tab==='rubriques'?'active':''}" onclick="state.tab='rubriques';state.selectedDept=null;render();">👥<span>Rubriques</span></button>
-      ${isMain ? `<button class="${state.tab==='admin'?'active':''}" onclick="openTab('admin')">🛡️<span>Admin</span></button>` : ""}
+      <button class="${state.tab==='admin'?'active':''}" onclick="openTab('admin')">🛡️<span>Admin</span></button>
     </nav>
 
     ${state.panel==="member" ? renderMemberModal() : ""}
