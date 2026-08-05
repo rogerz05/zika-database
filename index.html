@@ -310,7 +310,14 @@ function uniqueMembers(){
   for(const m of state.members){
     const key = (m.name||"").trim().toLowerCase();
     if(!key) continue;
-    if(!seen.has(key)) seen.set(key, m);
+    if(!seen.has(key)){
+      seen.set(key, {...m});
+    } else {
+      const existing = seen.get(key);
+      for(const field of ["location","role","contact","comment","gender","photo_url"]){
+        if(!existing[field] && m[field]) existing[field] = m[field];
+      }
+    }
   }
   return Array.from(seen.values());
 }
