@@ -347,6 +347,16 @@ function locationStats(){
     .map(([location,count])=>({ location, count, pct: total? Math.round(count/total*100) : 0 }))
     .sort((a,b)=>b.count-a.count);
 }
+function incompleteMembers(){
+  return uniqueMembers().filter(m => !(m.location||"").trim() || !m.gender)
+    .map(m => ({
+      ...m,
+      missing: [ !(m.location||"").trim() ? "lieu d'habitation" : null, !m.gender ? "sexe" : null ].filter(Boolean),
+      depts: Array.from(new Set(state.members.filter(x=>(x.name||"").trim().toLowerCase()===(m.name||"").trim().toLowerCase()).map(x=>{
+        const d = state.departments.find(dep=>dep.id===x.dept_id); return d ? d.name : null;
+      }).filter(Boolean)))
+    }));
+}
 
 // ---------------- PRÉSENCE AU CULTE ----------------
 function openAttendanceForm(){
@@ -671,6 +681,7 @@ function renderMain(){
   } else if(state.tab === "admin"){
     const gStats = genderStats();
     const lStats = locationStats();
+    const incompleteList = incompleteMembers();
     body = `
       <div style="margin-bottom:20px;">
         <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Statistiques</h2>
@@ -700,6 +711,22 @@ function renderMain(){
               </div>
             `).join("")}
           </div>
+        </div>
+      </div>
+      <div style="margin-bottom:20px;">
+        <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Fiches incomplètes ${incompleteList.length>0?`(${incompleteList.length})`:""}</h2>
+        <div class="glass" style="overflow:hidden;">
+          ${incompleteList.length===0 ? `<p style="padding:16px;color:var(--muted);font-size:14px;margin:0;">Toutes les fiches sont complètes 🎉</p>` :
+            incompleteList.map(m=>`
+              <div class="ledger-row" style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                <div style="min-width:0;">
+                  <p style="font-size:14px;font-weight:600;margin:0;">${esc(m.name)}</p>
+                  <p style="font-size:11px;color:var(--coral);margin:2px 0 0;">Manque : ${m.missing.join(", ")}</p>
+                  ${m.depts.length>0?`<p style="font-size:11px;color:var(--muted2);margin:2px 0 0;">${m.depts.map(esc).join(", ")}</p>`:""}
+                </div>
+                <button onclick='openEditMember(${JSON.stringify(m).replace(/'/g,"&#39;")})' style="background:none;border:none;color:var(--teal);font-size:12px;font-weight:600;flex-shrink:0;">✏ Compléter</button>
+              </div>
+            `).join("")}
         </div>
       </div>
       <div style="margin-bottom:20px;">
