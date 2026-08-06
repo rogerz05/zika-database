@@ -305,9 +305,16 @@ async function handleDeleteEvent(id){
 }
 
 // ---------------- STATISTIQUES ----------------
+const PERSON_DEPT_NAMES = ["conseil","jadci","aoc","hac"];
+function isPersonDept(deptId){
+  const dept = state.departments.find(d=>d.id===deptId);
+  if(!dept) return false;
+  return PERSON_DEPT_NAMES.includes((dept.name||"").trim().toLowerCase());
+}
 function uniqueMembers(){
   const seen = new Map();
   for(const m of state.members){
+    if(!isPersonDept(m.dept_id)) continue;
     const key = (m.name||"").trim().toLowerCase();
     if(!key) continue;
     if(!seen.has(key)){
