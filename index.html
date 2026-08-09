@@ -172,6 +172,9 @@ const state = {
   memberForm: {name:"",role:"",location:"",contact:"",comment:"",photoUrl:"",gender:""},
   attendance: [],
   attendanceForm: {date:"", men:"", women:""},
+  activities: [],
+  activityPanel: null,
+  activityForm: {title:"", date:"", description:""},
   newDeptName: "",
   confirmDelete: null,
   error: "",
@@ -262,16 +265,18 @@ async function init(){
 }
 
 async function loadData(){
-  const [depts, mems, evs, att] = await Promise.all([
+  const [depts, mems, evs, att, acts] = await Promise.all([
     sb("departments?select=*&order=created_at.asc"),
     sb("members?select=*&order=added_at.desc"),
     sb("member_events?select=*&order=event_date.desc"),
     sb("attendance?select=*&order=attendance_date.desc"),
+    sb("activities?select=*&order=activity_date.desc"),
   ]);
   state.departments = depts;
   state.members = mems;
   state.memberEvents = evs;
   state.attendance = att;
+  state.activities = acts;
 }
 
 const EVENT_TYPES = [
@@ -392,6 +397,40 @@ async function handleSaveAttendance(){
 }
 async function handleDeleteAttendance(id){
   try { await sb(`attendance?id=eq.${id}`, { method:"DELETE" }); state.attendance = await sb("attendance?select=*&order=attendance_date.desc"); render(); }
+  catch(e){ state.error = e.message; render(); }
+}
+
+// ---------------- ACTIVITÉS DE L'ÉGLISE ----------------
+function openNewActivity(){
+  state.activityForm = {title:"", date:"", description:""};
+  state.activityPanel = "new";
+  render();
+}
+function openEditActivity(a){
+  state.activityForm = { title:a.title||"", date:a.activity_date||"", description:a.description||"" };
+  state.activityPanel = a.id;
+  render();
+}
+function closeActivityPanel(){ state.activityPanel = null; render(); }
+async function handleSaveActivity(){
+  const title = document.getElementById("act-title").value.trim();
+  const date = document.getElementById("act-date").value;
+  const description = document.getElementById("act-desc").value.trim();
+  if(!title) return;
+  state.error = "";
+  try {
+    if(state.activityPanel === "new"){
+      await sb("activities", { method:"POST", body: JSON.stringify([{ title, activity_date: date || null, description, created_by: state.session.name }]) });
+    } else {
+      await sb(`activities?id=eq.${state.activityPanel}`, { method:"PATCH", body: JSON.stringify({ title, activity_date: date || null, description }) });
+    }
+    state.activities = await sb("activities?select=*&order=activity_date.desc");
+    state.activityPanel = null;
+    render();
+  } catch(e){ state.error = "Erreur d'enregistrement : " + e.message; render(); }
+}
+async function handleDeleteActivity(id){
+  try { await sb(`activities?id=eq.${id}`, { method:"DELETE" }); state.activities = await sb("activities?select=*&order=activity_date.desc"); state.confirmDelete=null; render(); }
   catch(e){ state.error = e.message; render(); }
 }
 
@@ -737,6 +776,30 @@ function renderMain(){
         </div>
       </div>
       <div style="margin-bottom:20px;">
+        <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Activités de l'église</h2>
+        <button class="btn-teal" style="width:100%;margin-bottom:12px;" onclick="openNewActivity()">+ Ajouter une activité</button>
+        <div class="glass" style="overflow:hidden;">
+          ${state.activities.length===0 ? `<p style="padding:16px;color:var(--muted);font-size:14px;margin:0;">Aucune activité enregistrée.</p>` :
+            state.activities.map(a=>`
+              <div class="ledger-row" style="padding:12px 16px;">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+                  <div style="min-width:0;">
+                    <p style="font-size:14px;font-weight:600;margin:0;">${esc(a.title)}</p>
+                    ${a.activity_date?`<p style="font-size:11px;color:var(--muted2);margin:2px 0 0;">${esc(a.activity_date)}</p>`:""}
+                    ${a.description?`<p style="font-size:13px;color:var(--muted);margin:4px 0 0;">${esc(a.description)}</p>`:""}
+                  </div>
+                  <div style="display:flex;gap:10px;flex-shrink:0;">
+                    <button onclick='openEditActivity(${JSON.stringify(a).replace(/'/g,"&#39;")})' style="background:none;border:none;color:var(--teal);font-size:12px;font-weight:600;">✏</button>
+                    ${state.confirmDelete?.type==="activity" && state.confirmDelete.id===a.id ?
+                      `<span style="display:flex;gap:6px;font-size:12px;"><button onclick="handleDeleteActivity('${a.id}')" style="background:none;border:none;color:var(--coral);font-weight:600;">Oui</button><button onclick="state.confirmDelete=null;render();" style="background:none;border:none;color:var(--muted);">Non</button></span>` :
+                      `<button onclick="state.confirmDelete={type:'activity',id:'${a.id}'};render();" style="background:none;border:none;color:var(--coral);font-size:12px;">🗑</button>`}
+                  </div>
+                </div>
+              </div>
+            `).join("")}
+        </div>
+      </div>
+      <div style="margin-bottom:20px;">
         <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Présence au culte du dimanche</h2>
         <button class="btn-gold" style="width:100%;margin-bottom:12px;" onclick="openAttendanceForm()">+ Enregistrer une présence</button>
         <div class="glass" style="overflow:hidden;">
@@ -830,6 +893,7 @@ function renderMain(){
     ${state.panel==="member" ? renderMemberModal() : ""}
     ${state.panel==="dept" ? renderDeptModal() : ""}
     ${state.panel==="attendance" ? renderAttendanceModal() : ""}
+    ${state.activityPanel ? renderActivityModal() : ""}
     ${state.eventPanel ? renderEventModal() : ""}
     ${state.adminPanel ? renderAdminModal() : ""}
     ${state.detailMember ? renderMemberDetailModal() : ""}
@@ -1025,6 +1089,29 @@ function renderAttendanceModal(){
           </div>
         </div>
         <div class="modal-footer"><button class="btn-gold" style="width:100%" onclick="handleSaveAttendance()">Enregistrer</button></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderActivityModal(){
+  const f = state.activityForm;
+  const isNew = state.activityPanel === "new";
+  return `
+    <div class="modal-overlay">
+      <div class="modal-panel glass-strong">
+        <div class="modal-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h2 class="font-display" style="font-size:18px;margin:0;">${isNew?"Nouvelle activité":"Modifier l'activité"}</h2>
+            <button onclick="closeActivityPanel()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div><label class="label">Titre *</label><input id="act-title" value="${esc(f.title)}" placeholder="Ex : Mariage, Semaine spirituelle..." /></div>
+            <div><label class="label">Date</label><input id="act-date" type="date" value="${esc(f.date)}" /></div>
+            <div><label class="label">Description</label><textarea id="act-desc" rows="3" placeholder="Détails (facultatif)...">${esc(f.description)}</textarea></div>
+          </div>
+        </div>
+        <div class="modal-footer"><button class="btn-teal" style="width:100%" onclick="handleSaveActivity()">${isNew?"Ajouter":"Enregistrer"}</button></div>
       </div>
     </div>
   `;
