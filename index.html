@@ -244,7 +244,7 @@ function startPolling(){
         }
       }
       state.notifiedIds = new Set(activity.map(a=>a.id));
-      const modalOpen = state.panel || state.eventPanel || state.adminPanel || state.detailMember;
+      const modalOpen = state.panel || state.eventPanel || state.adminPanel || state.detailMember || state.activityPanel;
       if(!modalOpen) render();
     } catch(e){}
   }, 20000);
