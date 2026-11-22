@@ -59,6 +59,31 @@
   @media(min-width:640px){.modal-overlay{align-items:center;} .modal-panel{border-radius:24px;}}
   .modal-body{overflow-y:auto;padding:20px;flex:1;}
   .modal-footer{padding:16px 20px;border-top:1px solid var(--border);}
+  .app-header{position:relative;overflow:hidden;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px;margin-bottom:20px;border-radius:24px;
+    background:radial-gradient(520px 240px at 100% 0%,rgba(255,210,63,0.30),transparent 60%),radial-gradient(320px 180px at 0% 100%,rgba(95,168,211,0.28),transparent 60%),linear-gradient(135deg,#0A1330 0%,#122354 55%,#1A2E6B 100%);
+    border:1px solid rgba(242,183,5,0.38);box-shadow:0 14px 34px rgba(10,19,48,0.28);}
+  .app-header .kicker{font-size:10px;letter-spacing:.16em;color:#F2C94C;margin:0;text-transform:uppercase;font-weight:600;}
+  .app-header h1{font-family:Georgia,'Times New Roman',serif;font-size:23px;margin:2px 0 0;color:#fff;line-height:1.2;font-weight:700;}
+  .app-header .count{font-size:12px;color:rgba(255,255,255,0.72);margin:4px 0 0;}
+  .logo-tile{width:48px;height:48px;border-radius:14px;background:#fff;padding:3px;flex-shrink:0;box-shadow:0 4px 14px rgba(0,0,0,0.35);}
+  .logo-tile img{width:100%;height:100%;object-fit:contain;border-radius:11px;display:block;}
+  .logout-btn{background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.24);color:#fff;border-radius:14px;padding:8px 12px;font-size:12px;display:flex;align-items:center;gap:5px;flex-shrink:0;}
+  .login-screen{position:fixed;inset:0;z-index:50;overflow-y:auto;
+    background:radial-gradient(700px 360px at 80% -5%,rgba(255,210,63,0.16),transparent 60%),linear-gradient(180deg,#060C1E 0%,#0A1330 100%);}
+  .login-hero{position:relative;overflow:hidden;border-radius:28px;padding:30px 20px 26px;text-align:center;margin-bottom:14px;
+    border:1px solid rgba(242,183,5,0.35);box-shadow:0 20px 50px rgba(0,0,0,0.45);
+    background:repeating-conic-gradient(from 200deg at 75% -15%,rgba(255,215,100,0.10) 0 4deg,transparent 4deg 10deg),radial-gradient(420px 260px at 75% -10%,rgba(255,214,102,0.60),transparent 60%),linear-gradient(145deg,#0C1738 0%,#16296B 100%);}
+  .login-hero .logo-big{width:104px;height:104px;border-radius:28px;background:#fff;padding:5px;margin:0 auto 16px;box-shadow:0 12px 34px rgba(0,0,0,0.5);}
+  .login-hero .logo-big img{width:100%;height:100%;object-fit:contain;border-radius:23px;display:block;}
+  .login-hero h1{font-family:Georgia,'Times New Roman',serif;font-size:28px;margin:0;line-height:1.15;color:#FFE9A8;text-shadow:0 2px 10px rgba(0,0,0,0.5);}
+  .login-hero .place{font-size:12px;letter-spacing:.28em;color:#F2C94C;margin:8px 0 0;text-transform:uppercase;font-weight:600;}
+  .login-hero .tag{font-size:13px;color:rgba(255,255,255,0.75);margin:6px 0 0;}
+  .login-card{border-radius:24px;padding:20px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);}
+  .login-card h2{font-family:Georgia,'Times New Roman',serif;font-size:22px;color:#fff;margin:0 0 6px;}
+  .login-card p{font-size:14px;color:rgba(255,255,255,0.7);margin:0 0 16px;}
+  .login-card label{display:block;font-size:13px;color:rgba(255,255,255,0.7);margin-bottom:6px;}
+  .login-card input{width:100%;background:#070D1F;border:1px solid rgba(255,255,255,0.18);color:#fff;border-radius:14px;padding:15px;font-size:16px;margin-bottom:14px;}
+  .login-card input:focus{border-color:var(--gold);}
   ::selection{background:var(--gold);color:#16112A;}
   .spin{animation:spin 1s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
@@ -758,17 +783,23 @@ function renderSetup(){
 
 function renderLogin(){
   app.innerHTML = `
-    <div class="container" style="max-width:380px;display:flex;flex-direction:column;justify-content:center;min-height:100vh;padding-top:0;padding-bottom:0;">
-      <img src="${LOGO_URI}" style="width:88px;display:block;margin:0 auto 16px;border-radius:14px;" />
-      <p style="font-size:11px;letter-spacing:.25em;color:var(--muted);margin:0 0 4px;text-align:center;text-transform:uppercase;">ACCÈS ADMINISTRATEUR</p>
-      <h1 class="font-display title-gradient" style="font-size:28px;margin:0 0 4px;text-align:center;">Registre des membres</h1>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 24px;text-align:center;">Temple des Vainqueurs — San Pédro, Colas</p>
-      <div class="glass" style="padding:14px;display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-        <span>🔑</span>
-        <input id="login-code" type="text" autocomplete="off" placeholder="Entre ton code d'accès" style="background:transparent;border:none;padding:4px;-webkit-text-security:disc;" />
+    <div class="login-screen">
+      <div style="max-width:440px;margin:0 auto;padding:24px 16px;min-height:100%;display:flex;flex-direction:column;justify-content:center;">
+        <div class="login-hero">
+          <div class="logo-big"><img src="${LOGO_URI}" alt="" /></div>
+          <h1>Temple des Vainqueurs</h1>
+          <p class="place">San Pédro · Colas</p>
+          <p class="tag">Registre des membres</p>
+        </div>
+        <div class="login-card">
+          <h2>Connexion</h2>
+          <p>Entre ton code d'accès administrateur pour ouvrir le registre.</p>
+          <label for="login-code">Code d'accès</label>
+          <input id="login-code" type="text" autocomplete="off" placeholder="Entre ton code d'accès" style="-webkit-text-security:disc;" />
+          ${state.error ? `<p style="color:#FF8A7C;font-size:13px;margin:0 0 12px;text-align:center;">${esc(state.error)}</p>` : ""}
+          <button class="btn-gold" style="width:100%" onclick="handleLogin()">Entrer</button>
+        </div>
       </div>
-      ${state.error ? `<p style="color:var(--coral);font-size:13px;margin:0 0 12px;text-align:center;">${esc(state.error)}</p>` : ""}
-      <button class="btn-gold" style="width:100%" onclick="handleLogin()">Entrer</button>
     </div>
   `;
   document.getElementById("login-code").addEventListener("keydown", e => { if(e.key==="Enter") handleLogin(); });
@@ -944,16 +975,16 @@ function renderMain(){
 
   app.innerHTML = `
     <div class="container">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;">
-        <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-          <img src="${LOGO_URI}" style="width:34px;height:34px;border-radius:9px;flex-shrink:0;object-fit:cover;" />
+      <div class="app-header">
+        <div style="display:flex;align-items:center;gap:12px;min-width:0;">
+          <div class="logo-tile"><img src="${LOGO_URI}" alt="" /></div>
           <div style="min-width:0;">
-            <p style="font-size:10px;letter-spacing:.15em;color:var(--muted);margin:0;text-transform:uppercase;">TEMPLE DES VAINQUEURS · SAN PÉDRO</p>
-            <h1 class="font-display title-gradient" style="font-size:22px;margin:0;line-height:1.25;">${esc(title)}</h1>
-            ${state.tab==="rubriques" && !state.selectedDept ? `<p style="font-size:12px;color:var(--muted2);margin:4px 0 0;">${state.departments.length} rubrique${state.departments.length!==1?'s':''} · ${state.members.length} membre${state.members.length!==1?'s':''}</p>` : ""}
+            <p class="kicker">Temple des Vainqueurs · San Pédro</p>
+            <h1>${esc(title)}</h1>
+            ${state.tab==="rubriques" && !state.selectedDept ? `<p class="count">${state.departments.length} rubrique${state.departments.length!==1?'s':''} · ${state.members.length} membre${state.members.length!==1?'s':''}</p>` : ""}
           </div>
         </div>
-        <button onclick="logout()" class="glass" style="border:none;padding:7px 12px;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:5px;flex-shrink:0;">↩ ${esc(state.session.name.split(" ")[0])}</button>
+        <button onclick="logout()" class="logout-btn">↩ ${esc(state.session.name.split(" ")[0])}</button>
       </div>
       ${state.error ? `<p style="color:var(--coral);font-size:13px;margin:0 0 12px;">${esc(state.error)}</p>` : ""}
       ${body}
