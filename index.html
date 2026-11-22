@@ -173,6 +173,8 @@ const state = {
   attendance: [],
   attendanceShowAll: false,
   locationShowAll: false,
+  waText: "",
+  waSent: {},
   attendanceForm: {date:"", men:"", women:""},
   activities: [],
   activityPanel: null,
@@ -820,8 +822,8 @@ function renderMain(){
       <button onclick="backToDepts()" style="background:none;border:none;color:var(--muted);font-size:13px;margin-bottom:16px;padding:0;">← Toutes les rubriques</button>
       <div class="glass" style="display:flex;align-items:center;gap:8px;padding:12px 14px;margin-bottom:16px;">
         <span>🔍</span><input id="search-input" placeholder="Chercher un nom, un lieu, une fonction..." value="${esc(state.query)}" style="background:transparent;border:none;padding:4px;" oninput="state.query=this.value; renderMainListOnly();" />
-        <button id="voice-btn" onclick="startVoiceSearch()" title="Recherche vocale" style="background:none;border:none;font-size:20px;padding:4px 6px;flex-shrink:0;">🎤</button>
       </div>
+      <button class="btn-teal" style="width:100%;margin-bottom:16px;" onclick="openWhatsAppGroup()">📱 Message groupé WhatsApp</button>
       <div id="member-list">${renderMemberList(list)}</div>
     `;
   } else if(state.tab === "admin"){
@@ -961,6 +963,7 @@ function renderMain(){
     ${state.panel==="member" ? renderMemberModal() : ""}
     ${state.panel==="dept" ? renderDeptModal() : ""}
     ${state.panel==="attendance" ? renderAttendanceModal() : ""}
+    ${state.panel==="whatsapp" ? renderWhatsAppModal() : ""}
     ${state.activityPanel ? renderActivityModal() : ""}
     ${state.eventPanel ? renderEventModal() : ""}
     ${state.adminPanel ? renderAdminModal() : ""}
@@ -1048,34 +1051,74 @@ function renderMemberDetailModal(){
   `;
 }
 
-let voiceRec = null;
-function startVoiceSearch(){
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const btn = document.getElementById("voice-btn");
-  if(!SR){ alert("La recherche vocale n'est pas disponible sur ce navigateur. Utilise Google Chrome."); return; }
-  if(voiceRec){ try{ voiceRec.stop(); }catch(e){} return; }
-  const rec = new SR();
-  voiceRec = rec;
-  rec.lang = "fr-FR";
-  rec.interimResults = false;
-  rec.maxAlternatives = 1;
-  const reset = () => { voiceRec = null; const b = document.getElementById("voice-btn"); if(b){ b.textContent = "🎤"; b.style.background = "none"; } };
-  rec.onstart = () => { if(btn){ btn.textContent = "🔴"; } };
-  rec.onresult = (e) => {
-    let text = (e.results[0] && e.results[0][0]) ? e.results[0][0].transcript : "";
-    text = text.replace(/[.,;!?]+$/,"").trim();
-    state.query = text;
-    const input = document.getElementById("search-input");
-    if(input) input.value = text;
-    renderMainListOnly();
-  };
-  rec.onerror = (e) => {
-    reset();
-    if(e.error === "not-allowed" || e.error === "service-not-allowed") alert("Autorise le micro pour cette page dans Chrome (icône à gauche de l'adresse), puis réessaie.");
-    else if(e.error === "no-speech") alert("Je n'ai rien entendu. Touche le micro et parle tout de suite.");
-  };
-  rec.onend = reset;
-  try{ rec.start(); }catch(err){ reset(); }
+// ---------------- MESSAGE GROUPÉ WHATSAPP ----------------
+function waNumber(contact){
+  const parts = String(contact||"").split(/[\/,;]|\bou\b/i);
+  for(const part of parts){
+    const raw = part.trim();
+    let d = raw.replace(/\D/g,"");
+    if(d.length < 8) continue;
+    if(d.startsWith("00")) d = d.slice(2);
+    else if(raw.startsWith("+")) { /* numéro déjà international */ }
+    else if(d.startsWith("225") && d.length >= 11) { /* préfixe déjà présent */ }
+    else if(d.length === 10 || d.length === 8) d = "225" + d;
+    else continue;
+    return d;
+  }
+  return null;
+}
+function openWhatsAppGroup(){
+  state.waText = "";
+  state.waSent = {};
+  state.panel = "whatsapp";
+  render();
+}
+function sendWhatsApp(memberId){
+  const m = state.members.find(x=>String(x.id)===String(memberId));
+  if(!m) return;
+  const num = waNumber(m.contact);
+  const text = (state.waText||"").trim();
+  if(!text){ alert("Écris d'abord ton message."); return; }
+  if(!num){ alert("Numéro invalide ou manquant pour " + (m.name||"ce membre") + "."); return; }
+  const msg = text.replace(/\{nom\}/gi, (m.name||"").trim());
+  window.open("https://wa.me/" + num + "?text=" + encodeURIComponent(msg), "_blank");
+  state.waSent[memberId] = true;
+  const b = document.getElementById("wa-btn-" + memberId);
+  if(b){ b.textContent = "✓ Ouvert"; b.style.background = "var(--inputbg)"; b.style.color = "var(--muted)"; }
+  const c = document.getElementById("wa-count");
+  if(c) c.textContent = Object.keys(state.waSent).length;
+}
+function renderWhatsAppModal(){
+  const dept = state.departments.find(d=>d.id===state.selectedDept);
+  const list = state.members.filter(m=>m.dept_id===state.selectedDept);
+  const withNum = list.filter(m=>waNumber(m.contact));
+  const withoutNum = list.filter(m=>!waNumber(m.contact));
+  const rows = withNum.map(m=>`<div class="ledger-row" style="display:flex;align-items:center;gap:8px;padding:10px 0;"><div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)}</div><div style="font-size:11px;color:var(--muted2);">${esc(m.contact)}</div></div><button id="wa-btn-${m.id}" onclick="sendWhatsApp('${m.id}')" style="background:var(--teal);color:#0D2B28;border:none;border-radius:12px;padding:8px 12px;font-size:12px;font-weight:700;flex-shrink:0;">Envoyer</button></div>`).join("");
+  const missing = withoutNum.length>0 ? `<p style="font-size:11px;color:var(--coral);margin:12px 0 0;">Sans numéro valide (${withoutNum.length}) : ${withoutNum.map(m=>esc(m.name)).join(", ")}</p>` : "";
+  return `
+    <div class="modal-overlay">
+      <div class="modal-panel glass-strong">
+        <div class="modal-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <h2 class="font-display" style="font-size:18px;margin:0;">Message WhatsApp</h2>
+            <button onclick="closePanel()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
+          </div>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Rubrique : <b>${esc(dept?dept.name:"")}</b></p>
+          <label class="label">Ton message</label>
+          <textarea id="wa-text" rows="5" placeholder="Ex : Bonjour {nom}, rappel : réunion jeudi à 18h au temple." oninput="state.waText=this.value" style="width:100%;">${esc(state.waText)}</textarea>
+          <p style="font-size:11px;color:var(--muted2);margin:6px 0 14px;">Écris <b>{nom}</b> pour que chaque message commence avec le nom du membre.</p>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span class="font-display" style="font-size:14px;">Membres (${withNum.length})</span>
+            <span style="font-size:11px;color:var(--muted2);">Ouverts : <span id="wa-count">${Object.keys(state.waSent).length}</span>/${withNum.length}</span>
+          </div>
+          ${withNum.length===0 ? `<p style="font-size:13px;color:var(--muted);">Aucun membre de cette rubrique n'a de numéro de contact valide.</p>` : rows}
+          ${missing}
+          <p style="font-size:11px;color:var(--muted2);margin:14px 0 0;">Touche « Envoyer » : WhatsApp s'ouvre avec le message prêt, il te reste à valider l'envoi, puis reviens à l'appli pour le membre suivant.</p>
+        </div>
+        <div class="modal-footer"><button class="btn-gold" style="width:100%" onclick="closePanel()">Fermer</button></div>
+      </div>
+    </div>
+  `;
 }
 function renderMainListOnly(){
   document.getElementById("member-list").innerHTML = renderMemberList(deptMembers(state.selectedDept));
