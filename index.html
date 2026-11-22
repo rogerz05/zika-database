@@ -174,6 +174,7 @@ const state = {
   attendanceShowAll: false,
   locationShowAll: false,
   waText: "",
+  waGreet: "Bonjour",
   waSent: {},
   attendanceForm: {date:"", men:"", women:""},
   activities: [],
@@ -1073,6 +1074,20 @@ function openWhatsAppGroup(){
   state.panel = "whatsapp";
   render();
 }
+function waBuildMessage(name){
+  const n = (name||"").trim();
+  const text = (state.waText||"").trim();
+  if(/\{nom\}/i.test(text)) return text.replace(/\{nom\}/gi, n);
+  const greet = (state.waGreet||"").trim();
+  return greet ? (greet + " " + n + ",\n\n" + text) : text;
+}
+function updateWaPreview(){
+  const el = document.getElementById("wa-preview");
+  if(!el) return;
+  const first = state.members.find(m=>m.dept_id===state.selectedDept && waNumber(m.contact));
+  const text = (state.waText||"").trim();
+  el.textContent = text ? waBuildMessage(first ? first.name : "Nom du membre") : "Ton message apparaîtra ici.";
+}
 function sendWhatsApp(memberId){
   const m = state.members.find(x=>String(x.id)===String(memberId));
   if(!m) return;
@@ -1080,7 +1095,7 @@ function sendWhatsApp(memberId){
   const text = (state.waText||"").trim();
   if(!text){ alert("Écris d'abord ton message."); return; }
   if(!num){ alert("Numéro invalide ou manquant pour " + (m.name||"ce membre") + "."); return; }
-  const msg = text.replace(/\{nom\}/gi, (m.name||"").trim());
+  const msg = waBuildMessage(m.name);
   window.open("https://wa.me/" + num + "?text=" + encodeURIComponent(msg), "_blank");
   state.waSent[memberId] = true;
   const b = document.getElementById("wa-btn-" + memberId);
@@ -1104,9 +1119,12 @@ function renderWhatsAppModal(){
             <button onclick="closePanel()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
           </div>
           <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Rubrique : <b>${esc(dept?dept.name:"")}</b></p>
+          <label class="label">Début du message (le nom du membre est ajouté automatiquement)</label>
+          <input id="wa-greet" value="${esc(state.waGreet)}" placeholder="Ex : Bonjour, Paix du Seigneur, Shalom..." oninput="state.waGreet=this.value; updateWaPreview();" style="width:100%;margin-bottom:12px;" />
           <label class="label">Ton message</label>
-          <textarea id="wa-text" rows="5" placeholder="Ex : Bonjour {nom}, rappel : réunion jeudi à 18h au temple." oninput="state.waText=this.value" style="width:100%;">${esc(state.waText)}</textarea>
-          <p style="font-size:11px;color:var(--muted2);margin:6px 0 14px;">Écris <b>{nom}</b> pour que chaque message commence avec le nom du membre.</p>
+          <textarea id="wa-text" rows="5" placeholder="Ex : Rappel : réunion jeudi à 18h au temple." oninput="state.waText=this.value; updateWaPreview();" style="width:100%;">${esc(state.waText)}</textarea>
+          <p style="font-size:11px;color:var(--muted2);margin:10px 0 4px;">Aperçu du message envoyé :</p>
+          <div id="wa-preview" style="font-size:12px;white-space:pre-wrap;background:var(--inputbg);border-radius:12px;padding:10px 12px;margin-bottom:14px;color:var(--muted);">Ton message apparaîtra ici.</div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
             <span class="font-display" style="font-size:14px;">Membres (${withNum.length})</span>
             <span style="font-size:11px;color:var(--muted2);">Ouverts : <span id="wa-count">${Object.keys(state.waSent).length}</span>/${withNum.length}</span>
