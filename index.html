@@ -172,6 +172,7 @@ const state = {
   memberForm: {name:"",role:"",location:"",contact:"",comment:"",photoUrl:"",gender:""},
   attendance: [],
   attendanceShowAll: false,
+  locationShowAll: false,
   attendanceForm: {date:"", men:"", women:""},
   activities: [],
   activityPanel: null,
@@ -359,6 +360,68 @@ function locationStats(){
   return Object.entries(counts)
     .map(([location,count])=>({ location, count, pct: total? Math.round(count/total*100) : 0 }))
     .sort((a,b)=>b.count-a.count);
+}
+function locationDetails(){
+  const list = uniqueMembers();
+  const map = {};
+  for(const m of list){
+    const loc = (m.location||"").trim() || "Non précisé";
+    if(!map[loc]) map[loc] = { location: loc, men:0, women:0, other:0, count:0 };
+    map[loc].count++;
+    if(m.gender==="homme") map[loc].men++;
+    else if(m.gender==="femme") map[loc].women++;
+    else map[loc].other++;
+  }
+  return Object.values(map).sort((a,b)=>b.count-a.count);
+}
+function toggleLocationAll(){ state.locationShowAll = !state.locationShowAll; render(); }
+function renderLocationStats(){
+  const all = locationDetails();
+  const total = all.reduce((s,l)=>s+l.count,0);
+  if(total===0) return `<div class="glass" style="padding:16px;"><p style="color:var(--muted);font-size:14px;margin:0;">Aucun membre enregistré.</p></div>`;
+  const known = all.filter(l=>l.location!=="Non précisé");
+  const unknown = all.find(l=>l.location==="Non précisé");
+  const knownTotal = known.reduce((s,l)=>s+l.count,0);
+  const pct = n => total ? Math.round(n/total*100) : 0;
+  const sub = t => `<div style="font-size:11px;color:var(--muted2);margin-top:2px;">${t}</div>`;
+  const stat = (label,val,extra,size) => `<div class="glass" style="flex:1;padding:10px 12px;min-width:0;"><div style="font-size:11px;color:var(--muted);">${label}</div><div class="font-display" style="font-size:${size||22}px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${val}</div>${extra}</div>`;
+  const topLoc = known[0];
+  const avg = known.length ? (knownTotal/known.length) : 0;
+  const avgTxt = (Math.round(avg*10)/10).toString().replace(".",",");
+  const top = `<div style="display:flex;gap:8px;margin-bottom:12px;">${
+    stat("Lieu principal", topLoc ? esc(topLoc.location) : "—", topLoc ? sub(`${topLoc.count} membre${topLoc.count>1?"s":""} · ${pct(topLoc.count)} %`) : sub(""), 18)
+  }${
+    stat("Nombre de lieux", known.length, sub("lieux différents"))
+  }${
+    stat("Moyenne", avgTxt, sub("membres par lieu"))
+  }</div>`;
+
+  // Graphique : 8 premiers lieux, hommes (bleu) / femmes (corail)
+  const shownBars = known.slice(0,8);
+  const H = 120, mx = Math.max(1, ...shownBars.map(l=>l.count));
+  const bars = shownBars.map(l=>{
+    const hm = Math.round(l.men/mx*H), hw = Math.round(l.women/mx*H), ho = Math.round(l.other/mx*H);
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:0;"><span style="font-size:11px;color:var(--muted);margin-bottom:3px;">${l.count}</span>${ho>0?`<div style="width:100%;max-width:28px;height:${ho}px;background:var(--muted2);border-radius:5px 5px 0 0;"></div>`:""}<div style="width:100%;max-width:28px;height:${hw}px;background:var(--coral);${ho>0?"":"border-radius:5px 5px 0 0;"}"></div><div style="width:100%;max-width:28px;height:${hm}px;background:var(--blue);"></div></div>`;
+  }).join("");
+  const labels = shownBars.map(l=>`<span style="flex:1;text-align:center;font-size:10px;color:var(--muted2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(l.location)}</span>`).join("");
+  const chartTitle = known.length>8 ? "Membres par lieu (8 premiers)" : "Membres par lieu";
+  const chart = `<div class="glass" style="padding:14px;margin-bottom:12px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><span class="font-display" style="font-size:14px;">${chartTitle}</span><span style="display:flex;gap:10px;font-size:11px;color:var(--muted);"><span>🔵 Hommes</span><span>🔴 Femmes</span></span></div><div style="display:flex;align-items:flex-end;gap:4px;height:${H+22}px;border-bottom:1px solid var(--border);">${bars}</div><div style="display:flex;gap:4px;margin-top:5px;">${labels}</div></div>`;
+
+  // Répartition : part des 3 premiers lieux
+  const top3 = known.slice(0,3), top3Count = top3.reduce((s,l)=>s+l.count,0);
+  const others = total - top3Count;
+  const colors = ["var(--gold)","var(--teal)","var(--violet)"];
+  const segs = top3.map((l,i)=>`<div style="width:${pct(l.count)}%;background:${colors[i]};"></div>`).join("");
+  const legend = top3.map((l,i)=>`<span style="display:flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:${colors[i]};display:inline-block;"></span>${esc(l.location)} <b>${pct(l.count)} %</b></span>`).join("");
+  const split = `<div class="glass" style="padding:14px;margin-bottom:12px;"><div class="font-display" style="font-size:14px;margin-bottom:10px;">Répartition des ${total} membres</div><div style="display:flex;height:14px;border-radius:99px;overflow:hidden;background:var(--inputbg);">${segs}</div><div style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted);margin-top:8px;">${legend}<span style="display:flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:var(--inputbg);border:1px solid var(--border);display:inline-block;"></span>Autres lieux <b>${pct(others)} %</b></span></div></div>`;
+
+  // Liste détaillée
+  const shown = state.locationShowAll ? all : all.slice(0,5);
+  const rows = shown.map(l=>`<div class="ledger-row" style="display:flex;align-items:center;gap:8px;padding:10px 14px;"><span style="flex:1;font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(l.location)}</span><span style="font-size:12px;color:var(--blue);">${l.men} H</span><span style="font-size:12px;color:var(--coral);">${l.women} F</span><span style="font-size:13px;font-weight:700;min-width:30px;text-align:right;">${l.count}</span><span style="font-size:11px;color:var(--muted2);min-width:36px;text-align:right;">${pct(l.count)} %</span></div>`).join("");
+  const more = all.length>5 ? `<button onclick="toggleLocationAll()" style="width:100%;background:none;border:none;border-top:1px solid rgba(43,30,90,0.08);padding:12px;font-size:13px;font-weight:600;color:#8B6A00;">${state.locationShowAll ? "Réduire la liste" : `Voir tous les lieux (${all.length})`}</button>` : "";
+  const note = unknown ? `<p style="font-size:11px;color:var(--muted2);margin:0;padding:0 14px 10px;">${unknown.count} membre${unknown.count>1?"s":""} sans lieu précisé (non compté${unknown.count>1?"s":""} dans les lieux ci-dessus).</p>` : "";
+  const hist = `<div class="glass" style="overflow:hidden;"><div class="font-display" style="font-size:14px;padding:14px 14px 4px;">${state.locationShowAll?"Tous les lieux":"Principaux lieux"}</div>${rows}${more}${note}</div>`;
+  return top + chart + split + hist;
 }
 function incompleteMembers(){
   return uniqueMembers().filter(m => !(m.location||"").trim() || !m.gender)
@@ -783,17 +846,10 @@ function renderMain(){
           </div>
           ${gStats.unknown>0?`<p style="font-size:11px;color:var(--muted2);margin:8px 0 0;">${gStats.unknown} sans sexe précisé</p>`:""}
         </div>
-        <div class="glass" style="padding:16px;">
-          <p style="font-size:13px;color:var(--muted);margin:0 0 12px;">Répartition par lieu d'habitation</p>
-          <div style="display:flex;flex-direction:column;gap:10px;">
-            ${lStats.map(l=>`
-              <div>
-                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;"><span>${esc(l.location)}</span><span style="color:var(--muted)">${l.count} · ${l.pct}%</span></div>
-                <div style="height:8px;border-radius:6px;background:var(--inputbg);overflow:hidden;"><div style="width:${l.pct}%;height:100%;background:linear-gradient(90deg,var(--gold),var(--gold2));"></div></div>
-              </div>
-            `).join("")}
-          </div>
-        </div>
+      </div>
+      <div style="margin-bottom:20px;">
+        <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Lieux d'habitation</h2>
+        ${renderLocationStats()}
       </div>
       <div style="margin-bottom:20px;">
         <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Fiches incomplètes ${incompleteList.length>0?`(${incompleteList.length})`:""}</h2>
