@@ -171,6 +171,7 @@ const state = {
   editingMemberId: null,
   memberForm: {name:"",role:"",location:"",contact:"",comment:"",photoUrl:"",gender:""},
   attendance: [],
+  attendanceShowAll: false,
   attendanceForm: {date:"", men:"", women:""},
   activities: [],
   activityPanel: null,
@@ -371,6 +372,41 @@ function incompleteMembers(){
 }
 
 // ---------------- PRÉSENCE AU CULTE ----------------
+const ATT_MONTHS=["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
+function attLong(d){const p=String(d||"").split("-");return p.length===3?`${parseInt(p[2],10)} ${ATT_MONTHS[parseInt(p[1],10)-1]} ${p[0]}`:esc(String(d||""));}
+function attShort(d){const p=String(d||"").split("-");return p.length===3?`${parseInt(p[2],10)} ${ATT_MONTHS[parseInt(p[1],10)-1]}`:esc(String(d||""));}
+function toggleAttendanceAll(){ state.attendanceShowAll = !state.attendanceShowAll; render(); }
+function renderAttendanceStats(){
+  const list = state.attendance || [];
+  if(list.length===0) return `<div class="glass" style="padding:16px;"><p style="color:var(--muted);font-size:14px;margin:0;">Aucune présence enregistrée.</p></div>`;
+  const tot = a => (a.men_count||0) + (a.women_count||0);
+  const last = list.slice(0,8), chrono = last.slice().reverse();
+  const avg = Math.round(last.reduce((s,a)=>s+tot(a),0)/last.length);
+  const best = last.reduce((b,a)=>tot(a)>tot(b)?a:b, last[0]);
+  const diff = list.length>1 ? tot(list[0])-tot(list[1]) : null;
+  const men = last.reduce((s,a)=>s+(a.men_count||0),0), wom = last.reduce((s,a)=>s+(a.women_count||0),0), sum = men+wom;
+  const menPct = sum ? Math.round(men/sum*100) : 0, womPct = sum ? 100-menPct : 0;
+  const nf = n => new Intl.NumberFormat("fr-FR").format(n);
+  const mx = Math.max(1, ...chrono.map(tot)), H = 120;
+  const sub = t => `<div style="font-size:11px;color:var(--muted2);margin-top:2px;">${t}</div>`;
+  const trend = diff===null ? sub("Premier culte")
+    : `<div style="font-size:11px;margin-top:2px;color:${diff>0?"var(--teal)":diff<0?"var(--coral)":"var(--muted2)"};">${diff>0?"▲ +":diff<0?"▼ −":"= "}${Math.abs(diff)} vs précédent</div>`;
+  const stat = (label,val,extra) => `<div class="glass" style="flex:1;padding:10px 12px;min-width:0;"><div style="font-size:11px;color:var(--muted);">${label}</div><div class="font-display" style="font-size:22px;margin-top:2px;">${val}</div>${extra}</div>`;
+  const plural = last.length>1 ? "s" : "";
+  const top = `<div style="display:flex;gap:8px;margin-bottom:12px;">${stat("Dernier culte",tot(list[0]),trend)}${stat("Moyenne",avg,sub(`${last.length} dernier${plural} culte${plural}`))}${stat("Record",tot(best),sub(attShort(best.attendance_date)))}</div>`;
+  const bars = chrono.map(a=>{
+    const hm = Math.round((a.men_count||0)/mx*H), hw = Math.round((a.women_count||0)/mx*H);
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:0;"><span style="font-size:11px;color:var(--muted);margin-bottom:3px;">${tot(a)}</span><div style="width:100%;max-width:28px;height:${hw}px;background:var(--coral);border-radius:5px 5px 0 0;"></div><div style="width:100%;max-width:28px;height:${hm}px;background:var(--blue);"></div></div>`;
+  }).join("");
+  const labels = chrono.map(a=>{ const p = String(a.attendance_date||"").split("-"); return `<span style="flex:1;text-align:center;font-size:10px;color:var(--muted2);min-width:0;">${p.length===3?p[2]+"/"+p[1]:""}</span>`; }).join("");
+  const chart = `<div class="glass" style="padding:14px;margin-bottom:12px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><span class="font-display" style="font-size:14px;">Évolution par dimanche</span><span style="display:flex;gap:10px;font-size:11px;color:var(--muted);"><span>🔵 Hommes</span><span>🔴 Femmes</span></span></div><div style="display:flex;align-items:flex-end;gap:4px;height:${H+22}px;border-bottom:1px solid var(--border);">${bars}</div><div style="display:flex;gap:4px;margin-top:5px;">${labels}</div></div>`;
+  const split = `<div class="glass" style="padding:14px;margin-bottom:12px;"><div class="font-display" style="font-size:14px;margin-bottom:10px;">Répartition sur ${last.length} culte${plural}</div><div style="display:flex;height:14px;border-radius:99px;overflow:hidden;background:var(--inputbg);"><div style="width:${menPct}%;background:var(--blue);"></div><div style="width:${womPct}%;background:var(--coral);"></div></div><div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:8px;"><span><b>${menPct} %</b> d’hommes · ${nf(men)}</span><span><b>${womPct} %</b> de femmes · ${nf(wom)}</span></div></div>`;
+  const shown = state.attendanceShowAll ? list : list.slice(0,3);
+  const rows = shown.map(a=>`<div class="ledger-row" style="display:flex;align-items:center;gap:8px;padding:10px 14px;"><span style="flex:1;font-size:13px;font-weight:600;">${attLong(a.attendance_date)}</span><span style="font-size:12px;color:var(--blue);">${a.men_count||0} H</span><span style="font-size:12px;color:var(--coral);">${a.women_count||0} F</span><span style="font-size:13px;font-weight:700;min-width:34px;text-align:right;">${tot(a)}</span><button onclick="handleDeleteAttendance('${a.id}')" style="background:none;border:none;color:var(--coral);font-size:12px;">🗑</button></div>`).join("");
+  const more = list.length>3 ? `<button onclick="toggleAttendanceAll()" style="width:100%;background:none;border:none;border-top:1px solid rgba(43,30,90,0.08);padding:12px;font-size:13px;font-weight:600;color:#8B6A00;">${state.attendanceShowAll ? "Réduire la liste" : `Voir tout l’historique (${list.length} cultes)`}</button>` : "";
+  const hist = `<div class="glass" style="overflow:hidden;"><div class="font-display" style="font-size:14px;padding:14px 14px 4px;">${state.attendanceShowAll?"Tous les cultes":"Derniers cultes"}</div>${rows}${more}</div>`;
+  return top + chart + split + hist;
+}
 function openAttendanceForm(){
   const today = new Date().toISOString().slice(0,10);
   state.attendanceForm = { date: today, men: "", women: "" };
@@ -802,32 +838,7 @@ function renderMain(){
       <div style="margin-bottom:20px;">
         <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Présence au culte du dimanche</h2>
         <button class="btn-gold" style="width:100%;margin-bottom:12px;" onclick="openAttendanceForm()">+ Enregistrer une présence</button>
-        <div class="glass" style="overflow:hidden;">
-          ${state.attendance.length===0 ? `<p style="padding:16px;color:var(--muted);font-size:14px;margin:0;">Aucune présence enregistrée.</p>` :
-            state.attendance.map(a=>{
-              const total = a.men_count + a.women_count;
-              const menPct = total? Math.round(a.men_count/total*100) : 0;
-              const womenPct = total? 100-menPct : 0;
-              return `
-              <div class="ledger-row" style="padding:12px 16px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                  <span style="font-size:13px;font-weight:600;">${esc(a.attendance_date)}</span>
-                  <div style="display:flex;align-items:center;gap:10px;">
-                    <span style="font-size:12px;color:var(--muted);">Total : ${total}</span>
-                    <button onclick="handleDeleteAttendance('${a.id}')" style="background:none;border:none;color:var(--coral);font-size:12px;">🗑</button>
-                  </div>
-                </div>
-                <div style="display:flex;height:10px;border-radius:6px;overflow:hidden;background:var(--inputbg);">
-                  <div style="width:${menPct}%;background:var(--blue);"></div>
-                  <div style="width:${womenPct}%;background:var(--coral);"></div>
-                </div>
-                <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted2);margin-top:3px;">
-                  <span>🔵 ${a.men_count} hommes</span>
-                  <span>🔴 ${a.women_count} femmes</span>
-                </div>
-              </div>
-            `;}).join("")}
-        </div>
+        ${renderAttendanceStats()}
       </div>
       ${isMain ? `
       <div style="margin-bottom:20px;">
