@@ -824,7 +824,11 @@ function renderMain(){
       <div class="glass" style="display:flex;align-items:center;gap:8px;padding:12px 14px;margin-bottom:16px;">
         <span>🔍</span><input id="search-input" placeholder="Chercher un nom, un lieu, une fonction..." value="${esc(state.query)}" style="background:transparent;border:none;padding:4px;" oninput="state.query=this.value; renderMainListOnly();" />
       </div>
-      <button class="btn-teal" style="width:100%;margin-bottom:16px;" onclick="openWhatsAppGroup()">📱 Message groupé WhatsApp</button>
+      <button class="btn-teal" style="width:100%;margin-bottom:10px;" onclick="openWhatsAppGroup()">📱 Message groupé WhatsApp</button>
+      <div style="display:flex;gap:8px;margin-bottom:16px;">
+        <button class="glass" style="flex:1;padding:12px;font-size:13px;font-weight:700;border:none;" onclick="exportDeptExcel()">📊 Exporter Excel</button>
+        <button class="glass" style="flex:1;padding:12px;font-size:13px;font-weight:700;border:none;" onclick="exportDeptPDF()">📄 Exporter PDF</button>
+      </div>
       <div id="member-list">${renderMemberList(list)}</div>
     `;
   } else if(state.tab === "admin"){
@@ -1050,6 +1054,67 @@ function renderMemberDetailModal(){
       </div>
     </div>
   `;
+}
+
+// ---------------- EXPORT DE LA LISTE ----------------
+function exportRows(deptId){
+  return state.members.filter(m=>m.dept_id===deptId)
+    .slice().sort((a,b)=>(a.name||"").localeCompare(b.name||"","fr"))
+    .map(m=>({
+      nom: (m.name||"").trim(),
+      role: (m.role||"").trim(),
+      lieu: (m.location||"").trim(),
+      contact: (m.contact||"").trim(),
+      sexe: m.gender==="homme" ? "Homme" : m.gender==="femme" ? "Femme" : ""
+    }));
+}
+function exportDate(){
+  const d = new Date();
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+function exportFileName(name){
+  return String(name||"rubrique").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-zA-Z0-9]+/g,"-").replace(/^-+|-+$/g,"").toLowerCase() || "rubrique";
+}
+function exportDeptExcel(){
+  const dept = state.departments.find(d=>d.id===state.selectedDept);
+  const rows = exportRows(state.selectedDept);
+  if(rows.length===0){ alert("Cette rubrique ne contient aucun membre."); return; }
+  const cell = v => { let t = String(v||"").replace(/"/g,'""'); if(/^[=@+\-]/.test(t)) t = "'" + t; return '"' + t + '"'; };
+  const phone = v => v ? '="' + String(v).replace(/"/g,'""') + '"' : '""';
+  const lines = [["N°","Nom","Fonction","Lieu d'habitation","Contact","Sexe"].map(cell).join(";")];
+  rows.forEach((r,i)=>{ lines.push([String(i+1),cell(r.nom),cell(r.role),cell(r.lieu),phone(r.contact),cell(r.sexe)].map((x,k)=>k===0?'"'+x+'"':x).join(";")); });
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "membres-" + exportFileName(dept?dept.name:"") + "-" + exportDate() + ".csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+function exportDeptPDF(){
+  const dept = state.departments.find(d=>d.id===state.selectedDept);
+  const rows = exportRows(state.selectedDept);
+  if(rows.length===0){ alert("Cette rubrique ne contient aucun membre."); return; }
+  const w = window.open("", "_blank");
+  if(!w){ alert("Le navigateur a bloqué l'ouverture. Autorise les fenêtres pop-up pour ce site, puis réessaie."); return; }
+  const dateTxt = new Date().toLocaleDateString("fr-FR",{day:"numeric",month:"long",year:"numeric"});
+  const body = rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.nom)}</td><td>${esc(r.role)}</td><td>${esc(r.lieu)}</td><td>${esc(r.contact)}</td><td>${esc(r.sexe)}</td></tr>`).join("");
+  w.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Membres - ${esc(dept?dept.name:"")}</title><style>
+    body{font-family:Arial,Helvetica,sans-serif;color:#1d1633;margin:24px;}
+    h1{font-size:20px;margin:0 0 4px;} .sub{font-size:13px;color:#555;margin:0 0 16px;}
+    table{width:100%;border-collapse:collapse;font-size:13px;}
+    th{background:#F2B705;color:#16112A;text-align:left;padding:8px;border:1px solid #d9a800;}
+    td{padding:7px 8px;border:1px solid #ddd;} tr:nth-child(even) td{background:#faf7ee;}
+    .bar{margin-bottom:16px;} button{background:#F2B705;border:none;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:bold;}
+    @media print{.bar{display:none;} body{margin:10mm;}}
+  </style></head><body>
+    <div class="bar"><button onclick="window.print()">🖨 Imprimer / Enregistrer en PDF</button></div>
+    <h1>Temple des Vainqueurs — San Pédro</h1>
+    <p class="sub">Rubrique : <b>${esc(dept?dept.name:"")}</b> · ${rows.length} membre${rows.length>1?"s":""} · ${esc(dateTxt)}</p>
+    <table><thead><tr><th>N°</th><th>Nom</th><th>Fonction</th><th>Lieu d'habitation</th><th>Contact</th><th>Sexe</th></tr></thead><tbody>${body}</tbody></table>
+  </body></html>`);
+  w.document.close();
+  setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} }, 500);
 }
 
 // ---------------- MESSAGE GROUPÉ WHATSAPP ----------------
