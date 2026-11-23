@@ -122,8 +122,91 @@ async function sb(path, opts={}) {
     const txt = await res.text().catch(()=> "");
     throw new Error(`Erreur ${res.status}: ${txt}`);
   }
+  try { notifyChange(path, opts); } catch(e) {}
   const text = await res.text();
   return text ? JSON.parse(text) : null;
+}
+
+// ---------------- NOTIFICATIONS (ntfy) ----------------
+const NTFY_SERVER = "https://ntfy.sh";
+const NTFY_TOPIC = "registre-ad-colas-3citq9xsc4q0";
+function ntfySend(message, title){
+  try {
+    fetch(NTFY_SERVER + "/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic: NTFY_TOPIC, title: title || "Registre des membres", message, tags: ["bell"], priority: 3, click: location.href.split("#")[0] })
+    }).catch(()=>{});
+  } catch(e) {}
+}
+function fmtDateFr(d){ if(!d) return ""; const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : String(d); }
+function describeChange(path, opts){
+  const method = (opts.method || "GET").toUpperCase();
+  if(method === "GET" || !state.session) return null;
+  const table = path.split("?")[0];
+  const idMatch = path.match(/[?&]id=eq\.([^&]+)/);
+  const id = idMatch ? decodeURIComponent(idMatch[1]) : null;
+  let body = null;
+  try { if(opts.body){ const b = JSON.parse(opts.body); body = Array.isArray(b) ? b[0] : b; } } catch(e) {}
+  const q = v => v ? `« ${v} »` : "";
+  if(table === "members"){
+    if(method === "POST" && body){
+      const d = state.departments.find(x=>x.id===body.dept_id);
+      return `a ajouté ${q(body.name)}${d ? " à la rubrique " + q(d.name) : ""}`;
+    }
+    if(method === "PATCH" && body) return `a modifié la fiche de ${q(body.name)}`;
+    if(method === "DELETE" && id){
+      const m = state.members.find(x=>String(x.id)===String(id));
+      return `a supprimé la fiche de ${q(m ? m.name : "un membre")}`;
+    }
+    return null;
+  }
+  if(table === "attendance"){
+    if(method === "POST" && body) return `a enregistré la présence du ${fmtDateFr(body.attendance_date)} : ${(+body.men_count||0)+(+body.women_count||0)} personnes (${body.men_count||0} H, ${body.women_count||0} F)`;
+    const a = id ? state.attendance.find(x=>String(x.id)===String(id)) : null;
+    if(method === "PATCH") return `a modifié la présence du ${a ? fmtDateFr(a.attendance_date) : "culte"}${body ? " : " + ((+body.men_count||0)+(+body.women_count||0)) + " personnes" : ""}`;
+    if(method === "DELETE") return `a supprimé la présence du ${a ? fmtDateFr(a.attendance_date) : "culte"}`;
+    return null;
+  }
+  if(table === "activities"){
+    const a = id ? state.activities.find(x=>String(x.id)===String(id)) : null;
+    if(method === "POST" && body) return `a ajouté l'activité ${q(body.title)}`;
+    if(method === "PATCH") return `a modifié l'activité ${q((body && body.title) || (a && a.title) || "")}`;
+    if(method === "DELETE") return `a supprimé l'activité ${q(a ? a.title : "")}`;
+    return null;
+  }
+  if(table === "member_events"){
+    if(method === "POST" && body){
+      const m = state.members.find(x=>String(x.id)===String(body.member_id));
+      return `a ajouté un événement${m ? " pour " + q(m.name) : ""}`;
+    }
+    if(method === "DELETE") return "a supprimé un événement";
+    return null;
+  }
+  if(table === "departments"){
+    if(method === "POST" && body) return `a créé la rubrique ${q(body.name)}`;
+    if(method === "DELETE" && id){
+      const d = state.departments.find(x=>String(x.id)===String(id));
+      return `a supprimé la rubrique ${q(d ? d.name : "")}`;
+    }
+    return null;
+  }
+  if(table === "admins"){
+    if(method === "POST" && body) return `a ajouté l'administrateur ${q(body.name)}`;
+    if(method === "PATCH" && body && !("last_seen" in body)) return "a modifié un administrateur";
+    if(method === "DELETE") return "a supprimé un administrateur";
+    return null;
+  }
+  return null;
+}
+function notifyChange(path, opts){
+  const what = describeChange(path, opts || {});
+  if(!what) return;
+  ntfySend(`${state.session.name} ${what}`);
+}
+function testNotification(){
+  ntfySend(`${state.session ? state.session.name : "Un administrateur"} teste les notifications.`, "Test — Registre des membres");
+  alert("Notification de test envoyée. Elle doit arriver sur les téléphones abonnés dans quelques secondes.");
 }
 
 async function uploadMemberPhoto(file){
@@ -997,6 +1080,15 @@ function renderMain(){
         <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Sauvegarde</h2>
         <button class="btn-teal" style="width:100%;" onclick="exportAllMembersExcel()">💾 Télécharger tous les membres (Excel)</button>
         <p style="font-size:11px;color:var(--muted2);margin:8px 0 0;">Un seul fichier : une feuille « Tous les membres » et une feuille par rubrique.</p>
+      </div>
+      <div style="margin-bottom:20px;">
+        <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Notifications</h2>
+        <div class="glass" style="padding:16px;">
+          <p style="font-size:13px;margin:0 0 10px;">Chaque modification (membres, présences, activités…) envoie une notification aux téléphones abonnés, même si l'appli est fermée.</p>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 6px;">Sur chaque téléphone : ouvre l'appli <b>ntfy</b>, touche <b>+</b>, puis écris ce nom de sujet :</p>
+          <div style="background:var(--inputbg);border-radius:12px;padding:12px;font-size:13px;font-weight:700;word-break:break-all;user-select:all;-webkit-user-select:all;margin-bottom:12px;">${NTFY_TOPIC}</div>
+          <button class="btn-teal" style="width:100%;" onclick="testNotification()">🔔 Envoyer une notification de test</button>
+        </div>
       </div>
       ${isMain ? `
       <div style="margin-bottom:20px;">
