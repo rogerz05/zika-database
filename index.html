@@ -194,7 +194,7 @@ const state = {
   query: "",
   panel: null, // 'member' | 'dept' | null
   editingMemberId: null,
-  memberForm: {name:"",role:"",location:"",contact:"",comment:"",photoUrl:"",gender:""},
+  memberForm: {name:"",role:"",location:"",contact:"",comment:"",photoUrl:"",gender:"",marital:""},
   attendance: [],
   attendanceShowAll: false,
   locationShowAll: false,
@@ -356,12 +356,65 @@ function uniqueMembers(){
       seen.set(key, {...m});
     } else {
       const existing = seen.get(key);
-      for(const field of ["location","role","contact","comment","gender","photo_url"]){
+      for(const field of ["location","role","contact","comment","gender","marital_status","photo_url"]){
         if(!existing[field] && m[field]) existing[field] = m[field];
       }
     }
   }
   return Array.from(seen.values());
+}
+const MARITAL_OPTIONS = [
+  { v:"marie",        label:"Marié(e)",        short:"Mariés",        color:"var(--teal)" },
+  { v:"fiance",       label:"Fiancé(e)",       short:"Fiancés",       color:"var(--violet)" },
+  { v:"celibataire",  label:"Célibataire",     short:"Célibataires",  color:"var(--gold)" },
+  { v:"divorce",      label:"Divorcé(e)",      short:"Divorcés",      color:"var(--coral)" },
+  { v:"veuf",         label:"Veuf / Veuve",    short:"Veufs / Veuves",color:"#6B6485" }
+];
+function maritalLabel(v){ const o = MARITAL_OPTIONS.find(x=>x.v===v); return o ? o.label : ""; }
+function maritalDetails(){
+  const list = uniqueMembers();
+  const rows = MARITAL_OPTIONS.map(o=>({ ...o, men:0, women:0, other:0, count:0 }));
+  let unknown = 0;
+  for(const m of list){
+    const r = rows.find(x=>x.v===m.marital_status);
+    if(!r){ unknown++; continue; }
+    r.count++;
+    if(m.gender==="homme") r.men++; else if(m.gender==="femme") r.women++; else r.other++;
+  }
+  const known = rows.reduce((s,r)=>s+r.count,0);
+  return { rows, unknown, known, total:list.length };
+}
+function renderMaritalStats(){
+  const { rows, unknown, known, total } = maritalDetails();
+  if(known===0) return `<div class="glass" style="padding:16px;"><p style="font-size:14px;color:var(--muted);margin:0;">Aucune situation matrimoniale renseignée pour le moment. Ouvre une fiche membre, touche « Modifier » et choisis la situation matrimoniale.</p></div>`;
+  const pct = n => known ? Math.round(n/known*100) : 0;
+  const sub = t => `<div style="font-size:11px;color:var(--muted2);margin-top:2px;">${t}</div>`;
+  const stat = (label,val,extra) => `<div class="glass" style="flex:1;padding:10px 12px;min-width:0;"><div style="font-size:11px;color:var(--muted);">${label}</div><div class="font-display" style="font-size:22px;margin-top:2px;">${val}</div>${extra}</div>`;
+  const byCount = rows.slice().sort((a,b)=>b.count-a.count);
+  const top = byCount[0];
+  const topCards = `<div style="display:flex;gap:8px;margin-bottom:12px;">${
+    stat("Situation principale", esc(top.short), sub(`${top.count} · ${pct(top.count)} %`))
+  }${
+    stat("Renseignées", known, sub(`sur ${total} membres`))
+  }${
+    stat("Non renseignées", unknown, sub(unknown>0?"à compléter":"tout est à jour"))
+  }</div>`;
+
+  const H = 120, mx = Math.max(1, ...rows.map(r=>r.count));
+  const bars = rows.map(r=>{
+    const hm = Math.round(r.men/mx*H), hw = Math.round(r.women/mx*H), ho = Math.round(r.other/mx*H);
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:0;"><span style="font-size:11px;color:var(--muted);margin-bottom:3px;">${r.count}</span>${ho>0?`<div style="width:100%;max-width:30px;height:${ho}px;background:var(--muted2);border-radius:5px 5px 0 0;"></div>`:""}<div style="width:100%;max-width:30px;height:${hw}px;background:var(--coral);${ho>0?"":"border-radius:5px 5px 0 0;"}"></div><div style="width:100%;max-width:30px;height:${hm}px;background:var(--blue);"></div></div>`;
+  }).join("");
+  const labels = rows.map(r=>`<span style="flex:1;text-align:center;font-size:10px;color:var(--muted2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.short)}</span>`).join("");
+  const chart = `<div class="glass" style="padding:14px;margin-bottom:12px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><span class="font-display" style="font-size:14px;">Membres par situation</span><span style="display:flex;gap:10px;font-size:11px;color:var(--muted);"><span>🔵 Hommes</span><span>🔴 Femmes</span></span></div><div style="display:flex;align-items:flex-end;gap:4px;height:${H+22}px;border-bottom:1px solid var(--border);">${bars}</div><div style="display:flex;gap:4px;margin-top:5px;">${labels}</div></div>`;
+
+  const segs = rows.filter(r=>r.count>0).map(r=>`<div style="width:${pct(r.count)}%;background:${r.color};"></div>`).join("");
+  const legend = rows.map(r=>`<span style="display:flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:${r.color};display:inline-block;"></span>${esc(r.short)} <b>${pct(r.count)} %</b></span>`).join("");
+  const split = `<div class="glass" style="padding:14px;margin-bottom:12px;"><div class="font-display" style="font-size:14px;margin-bottom:10px;">Répartition en % (${known} membre${known>1?"s":""} renseigné${known>1?"s":""})</div><div style="display:flex;height:14px;border-radius:99px;overflow:hidden;background:var(--inputbg);">${segs}</div><div style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted);margin-top:8px;">${legend}</div></div>`;
+
+  const list = byCount.map(r=>`<div class="ledger-row" style="display:flex;align-items:center;gap:8px;padding:10px 14px;"><span style="width:10px;height:10px;border-radius:50%;background:${r.color};flex-shrink:0;"></span><span style="flex:1;font-size:13px;font-weight:600;min-width:0;">${esc(r.label)}</span><span style="font-size:12px;color:var(--blue);">${r.men} H</span><span style="font-size:12px;color:var(--coral);">${r.women} F</span><span style="font-size:13px;font-weight:700;min-width:30px;text-align:right;">${r.count}</span><span style="font-size:11px;color:var(--muted2);min-width:36px;text-align:right;">${pct(r.count)} %</span></div>`).join("");
+  const hist = `<div class="glass" style="overflow:hidden;"><div class="font-display" style="font-size:14px;padding:14px 14px 4px;">Détail par situation</div>${list}${unknown>0?`<p style="font-size:11px;color:var(--muted2);margin:0;padding:6px 14px 12px;">${unknown} membre${unknown>1?"s":""} sans situation renseignée (non compté${unknown>1?"s":""} dans les pourcentages).</p>`:""}</div>`;
+  return topCards + chart + split + hist;
 }
 function genderStats(){
   const list = uniqueMembers();
@@ -662,7 +715,7 @@ function deptMembers(deptId){
 }
 
 function openNewMember(deptId){
-  state.memberForm = {name:"",role:"",location:"",contact:"",comment:"",photoUrl:"",gender:""};
+  state.memberForm = {name:"",role:"",location:"",contact:"",comment:"",photoUrl:"",gender:"",marital:""};
   pendingPhotoFile = null;
   state.editingMemberId = null;
   state.selectedDept = deptId;
@@ -670,7 +723,7 @@ function openNewMember(deptId){
   render();
 }
 function openEditMember(m){
-  state.memberForm = { name:m.name, role:m.role||"", location:m.location||"", contact:m.contact||"", comment:m.comment||"", photoUrl:m.photo_url||"", gender:m.gender||"" };
+  state.memberForm = { name:m.name, role:m.role||"", location:m.location||"", contact:m.contact||"", comment:m.comment||"", photoUrl:m.photo_url||"", gender:m.gender||"", marital:m.marital_status||"" };
   pendingPhotoFile = null;
   state.editingMemberId = m.id;
   state.panel = "member";
@@ -701,6 +754,7 @@ async function handleSaveMember(){
     contact: document.getElementById("mf-contact").value.trim(),
     comment: document.getElementById("mf-comment").value.trim(),
     gender: document.getElementById("mf-gender").value,
+    marital_status: document.getElementById("mf-marital").value || null,
   };
   try {
     if(pendingPhotoFile){
@@ -891,6 +945,10 @@ function renderMain(){
         ${renderLocationStats()}
       </div>
       <div style="margin-bottom:20px;">
+        <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Situation matrimoniale</h2>
+        ${renderMaritalStats()}
+      </div>
+      <div style="margin-bottom:20px;">
         <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Fiches incomplètes ${incompleteList.length>0?`(${incompleteList.length})`:""}</h2>
         <div class="glass" style="overflow:hidden;">
           ${incompleteList.length===0 ? `<p style="padding:16px;color:var(--muted);font-size:14px;margin:0;">Toutes les fiches sont complètes 🎉</p>` :
@@ -1026,6 +1084,7 @@ function renderMemberList(list){
           </button>
           ${m.role?`<p style="font-size:14px;color:#B8890A;margin:2px 0 0;">${esc(m.role)}</p>`:""}
           <div style="display:flex;flex-direction:column;gap:3px;margin-top:7px;font-size:14px;color:var(--muted);">
+            ${m.marital_status?`<span>💍 ${esc(maritalLabel(m.marital_status))}</span>`:""}
             ${m.location?`<span>📍 ${esc(m.location)}</span>`:""}
             ${m.contact?`<span>📞 ${esc(m.contact)}</span>`:""}
             ${m.comment?`<span>💬 ${esc(m.comment)}</span>`:""}
@@ -1068,6 +1127,7 @@ function renderMemberDetailModal(){
             ${m.role?`<p style="font-size:16px;color:#B8890A;margin:4px 0 0;">${esc(m.role)}</p>`:""}
           </div>
           <div style="display:flex;flex-direction:column;gap:12px;">
+            ${m.marital_status?`<div class="glass" style="padding:14px;display:flex;gap:10px;align-items:center;"><span style="font-size:18px;">💍</span><div><p class="label" style="margin:0 0 2px;">Situation matrimoniale</p><p style="font-size:15px;margin:0;">${esc(maritalLabel(m.marital_status))}</p></div></div>`:""}
             ${m.location?`<div class="glass" style="padding:14px;display:flex;gap:10px;align-items:center;"><span style="font-size:18px;">📍</span><div><p class="label" style="margin:0 0 2px;">Lieu d'habitation</p><p style="font-size:15px;margin:0;">${esc(m.location)}</p></div></div>`:""}
             ${m.contact?`<div class="glass" style="padding:14px;display:flex;gap:10px;align-items:center;"><span style="font-size:18px;">📞</span><div><p class="label" style="margin:0 0 2px;">Contact</p><p style="font-size:15px;margin:0;">${esc(m.contact)}</p></div></div>`:""}
             ${waNumber(m.contact)?`<div style="display:flex;gap:10px;"><a href="tel:+${waNumber(m.contact)}" style="flex:1;text-decoration:none;text-align:center;background:linear-gradient(135deg,var(--teal),var(--blue));color:#0D2B28;font-weight:700;border-radius:16px;padding:13px;font-size:14px;">📞 Appeler</a><a href="https://wa.me/${waNumber(m.contact)}" target="_blank" rel="noopener" style="flex:1;text-decoration:none;text-align:center;background:#25D366;color:#073B1B;font-weight:700;border-radius:16px;padding:13px;font-size:14px;">💬 WhatsApp</a></div>`:""}
@@ -1102,7 +1162,8 @@ function exportRows(deptId){
       role: (m.role||"").trim(),
       lieu: (m.location||"").trim(),
       contact: (m.contact||"").trim(),
-      sexe: m.gender==="homme" ? "Homme" : m.gender==="femme" ? "Femme" : ""
+      sexe: m.gender==="homme" ? "Homme" : m.gender==="femme" ? "Femme" : "",
+      situ: maritalLabel(m.marital_status)
     }));
 }
 function exportDate(){
@@ -1191,24 +1252,24 @@ function exportDeptExcel(){
   const dept = state.departments.find(d=>d.id===state.selectedDept);
   const rows = exportRows(state.selectedDept);
   if(rows.length===0){ alert("Cette rubrique ne contient aucun membre."); return; }
-  const table = [["N°","Nom","Fonction","Lieu d'habitation","Contact","Sexe"]];
-  rows.forEach((r,i)=> table.push([i+1, r.nom, r.role, r.lieu, r.contact, r.sexe]));
+  const table = [["N°","Nom","Fonction","Lieu d'habitation","Contact","Sexe","Situation matrimoniale"]];
+  rows.forEach((r,i)=> table.push([i+1, r.nom, r.role, r.lieu, r.contact, r.sexe, r.situ]));
   downloadBlob(buildXlsx([{ name: dept?dept.name:"Membres", rows: table }]), "membres-" + exportFileName(dept?dept.name:"") + "-" + exportDate() + ".xlsx");
 }
 function exportAllMembersExcel(){
   if(state.members.length===0){ alert("Aucun membre à sauvegarder."); return; }
   const sx = g => g==="homme" ? "Homme" : g==="femme" ? "Femme" : "";
-  const header = ["N°","Rubrique","Nom","Fonction","Lieu d'habitation","Contact","Sexe","Commentaire"];
+  const header = ["N°","Rubrique","Nom","Fonction","Lieu d'habitation","Contact","Sexe","Situation matrimoniale","Commentaire"];
   const deptName = id => { const d = state.departments.find(x=>x.id===id); return d ? d.name : ""; };
   const sorted = state.members.slice().sort((a,b)=> deptName(a.dept_id).localeCompare(deptName(b.dept_id),"fr") || (a.name||"").localeCompare(b.name||"","fr"));
   const all = [header];
-  sorted.forEach((m,i)=> all.push([i+1, deptName(m.dept_id), (m.name||"").trim(), (m.role||"").trim(), (m.location||"").trim(), (m.contact||"").trim(), sx(m.gender), (m.comment||"").trim()]));
+  sorted.forEach((m,i)=> all.push([i+1, deptName(m.dept_id), (m.name||"").trim(), (m.role||"").trim(), (m.location||"").trim(), (m.contact||"").trim(), sx(m.gender), maritalLabel(m.marital_status), (m.comment||"").trim()]));
   const sheets = [{ name:"Tous les membres", rows: all }];
   state.departments.slice().sort((a,b)=>(a.name||"").localeCompare(b.name||"","fr")).forEach(d=>{
     const list = sorted.filter(m=>m.dept_id===d.id);
     if(list.length===0) return;
-    const t = [["N°","Nom","Fonction","Lieu d'habitation","Contact","Sexe"]];
-    list.forEach((m,i)=> t.push([i+1, (m.name||"").trim(), (m.role||"").trim(), (m.location||"").trim(), (m.contact||"").trim(), sx(m.gender)]));
+    const t = [["N°","Nom","Fonction","Lieu d'habitation","Contact","Sexe","Situation matrimoniale"]];
+    list.forEach((m,i)=> t.push([i+1, (m.name||"").trim(), (m.role||"").trim(), (m.location||"").trim(), (m.contact||"").trim(), sx(m.gender), maritalLabel(m.marital_status)]));
     sheets.push({ name: d.name, rows: t });
   });
   downloadBlob(buildXlsx(sheets), "sauvegarde-membres-" + exportDate() + ".xlsx");
@@ -1220,7 +1281,7 @@ function exportDeptPDF(){
   const w = window.open("", "_blank");
   if(!w){ alert("Le navigateur a bloqué l'ouverture. Autorise les fenêtres pop-up pour ce site, puis réessaie."); return; }
   const dateTxt = new Date().toLocaleDateString("fr-FR",{day:"numeric",month:"long",year:"numeric"});
-  const body = rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.nom)}</td><td>${esc(r.role)}</td><td>${esc(r.lieu)}</td><td>${esc(r.contact)}</td><td>${esc(r.sexe)}</td></tr>`).join("");
+  const body = rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.nom)}</td><td>${esc(r.role)}</td><td>${esc(r.lieu)}</td><td>${esc(r.contact)}</td><td>${esc(r.sexe)}</td><td>${esc(r.situ)}</td></tr>`).join("");
   w.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Membres - ${esc(dept?dept.name:"")}</title><style>
     body{font-family:Arial,Helvetica,sans-serif;color:#1d1633;margin:24px;}
     h1{font-size:20px;margin:0 0 4px;} .sub{font-size:13px;color:#555;margin:0 0 16px;}
@@ -1233,7 +1294,7 @@ function exportDeptPDF(){
     <div class="bar"><button onclick="window.print()">🖨 Imprimer / Enregistrer en PDF</button></div>
     <h1>Temple des Vainqueurs — San Pédro</h1>
     <p class="sub">Rubrique : <b>${esc(dept?dept.name:"")}</b> · ${rows.length} membre${rows.length>1?"s":""} · ${esc(dateTxt)}</p>
-    <table><thead><tr><th>N°</th><th>Nom</th><th>Fonction</th><th>Lieu d'habitation</th><th>Contact</th><th>Sexe</th></tr></thead><tbody>${body}</tbody></table>
+    <table><thead><tr><th>N°</th><th>Nom</th><th>Fonction</th><th>Lieu d'habitation</th><th>Contact</th><th>Sexe</th><th>Situation</th></tr></thead><tbody>${body}</tbody></table>
   </body></html>`);
   w.document.close();
   setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} }, 500);
@@ -1353,6 +1414,12 @@ function renderMemberModal(){
                 <option value="" ${!f.gender?"selected":""}>Non précisé</option>
                 <option value="homme" ${f.gender==="homme"?"selected":""}>Homme</option>
                 <option value="femme" ${f.gender==="femme"?"selected":""}>Femme</option>
+              </select>
+            </div>
+            <div><label class="label">Situation matrimoniale</label>
+              <select id="mf-marital" style="color:var(--text);background:var(--inputbg);border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:14px;width:100%;font-family:inherit;">
+                <option value="" ${!f.marital?"selected":""}>Non précisée</option>
+                ${MARITAL_OPTIONS.map(o=>`<option value="${o.v}" ${f.marital===o.v?"selected":""}>${o.label}</option>`).join("")}
               </select>
             </div>
             <div><label class="label">Fonction dans l'église</label><input id="mf-role" value="${esc(f.role)}" placeholder="Ex : Diacre, Choriste..." /></div>
