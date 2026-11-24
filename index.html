@@ -168,7 +168,17 @@ function describeChange(path, opts){
     if(method === "DELETE") return `a supprimé la présence du ${a ? fmtDateFr(a.attendance_date) : "culte"}`;
     return null;
   }
+  if(table === "activity_types"){
+    if(method === "POST" && body) return `a créé le type d'activité ${q(body.name)}`;
+    if(method === "PATCH" && body && body.name) return `a modifié le type d'activité ${q(body.name)}`;
+    if(method === "DELETE" && id){
+      const t = state.activityTypes.find(x=>String(x.id)===String(id));
+      return `a supprimé le type d'activité ${q(t ? t.name : "")}`;
+    }
+    return null;
+  }
   if(table === "activities"){
+    if(method === "PATCH" && !id) return null;
     const a = id ? state.activities.find(x=>String(x.id)===String(id)) : null;
     if(method === "POST" && body) return `a ajouté l'activité ${q(body.title)}${body.activity_date ? " du " + fmtDateFr(body.activity_date) : ""}`;
     if(method === "PATCH") return `a modifié l'activité ${q((body && body.title) || (a && a.title) || "")}`;
@@ -290,6 +300,11 @@ const state = {
   activityForm: {title:"", date:"", time:"", place:"", category:"autre", description:""},
   actFilter: "all",
   actShowPast: false,
+  activityTypes: [],
+  activityTypesReady: false,
+  typesPanel: false,
+  typeForm: null,
+  typeDeleteConfirm: null,
   newDeptName: "",
   confirmDelete: null,
   error: "",
@@ -359,7 +374,7 @@ function startPolling(){
         }
       }
       state.notifiedIds = new Set(activity.map(a=>a.id));
-      const modalOpen = state.panel || state.eventPanel || state.adminPanel || state.detailMember || state.activityPanel;
+      const modalOpen = state.panel || state.eventPanel || state.adminPanel || state.detailMember || state.activityPanel || state.typesPanel;
       if(!modalOpen) render();
     } catch(e){}
   }, 20000);
@@ -380,13 +395,16 @@ async function init(){
 }
 
 async function loadData(){
-  const [depts, mems, evs, att, acts] = await Promise.all([
+  const [depts, mems, evs, att, acts, types] = await Promise.all([
     sb("departments?select=*&order=created_at.asc"),
     sb("members?select=*&order=added_at.desc"),
     sb("member_events?select=*&order=event_date.desc"),
     sb("attendance?select=*&order=attendance_date.desc"),
     sb("activities?select=*&order=activity_date.desc"),
+    sb("activity_types?select=*&order=created_at.asc").catch(()=>null),
   ]);
+  if(Array.isArray(types)){ state.activityTypes = types; state.activityTypesReady = true; }
+  else { state.activityTypes = []; state.activityTypesReady = false; }
   state.departments = depts;
   state.members = mems;
   state.memberEvents = evs;
@@ -670,36 +688,163 @@ async function handleDeleteAttendance(id){
 }
 
 // ---------------- ACTIVITÉS DE L'ÉGLISE ----------------
-const ACT_TYPES = [
-  { v:"mariage",  label:"Mariage",                  chip:"Mariages",  icon:"💍", color:"var(--coral)" },
-  { v:"bapteme",  label:"Baptême",                  chip:"Baptêmes",  icon:"💧", color:"var(--blue)" },
-  { v:"retraite", label:"Sortie / Retraite jeunes", chip:"Jeunes",    icon:"🏕️", color:"var(--teal)" },
-  { v:"priere",   label:"Prière / Veillée",         chip:"Prières",   icon:"🙏", color:"var(--violet)" },
-  { v:"special",  label:"Programme spécial",        chip:"Spéciaux",  icon:"⭐", color:"var(--gold)" }
+const DEFAULT_ACT_TYPES = [
+  { name:"Mariage", icon:"💍" },
+  { name:"Baptême", icon:"💧" },
+  { name:"Sortie / Retraite jeunes", icon:"🏕️" },
+  { name:"Prière / Veillée", icon:"🙏" },
+  { name:"Programme spécial", icon:"⭐" }
 ];
-const CUSTOM_ACT_COLORS = ["#E07A5F","#3D9970","#B07CC6","#D98E04","#2A9D8F","#5C7AEA"];
-function hasActType(a){ return !!(a.category && a.category!=="autre"); }
-function actType(v){
-  const t = ACT_TYPES.find(x=>x.v===v);
-  if(t) return t;
-  if(!v || v==="autre") return { v:"", label:"Non classé", chip:"Non classées", icon:"📌", color:"#6B6485" };
-  let h = 0; for(const c of String(v)) h = (h*31 + c.charCodeAt(0)) % CUSTOM_ACT_COLORS.length;
-  return { v, label:v, chip:v, icon:"🏷️", color:CUSTOM_ACT_COLORS[h] };
+const LEGACY_ACT_KEYS = { mariage:"Mariage", bapteme:"Baptême", retraite:"Sortie / Retraite jeunes", priere:"Prière / Veillée", special:"Programme spécial" };
+const ACT_COLORS = ["var(--coral)","var(--blue)","var(--teal)","var(--violet)","var(--gold)","#E07A5F","#3D9970","#B07CC6","#D98E04","#5C7AEA"];
+function actCat(a){
+  const c = a && a.category ? String(a.category).trim() : "";
+  if(!c || c==="autre") return "";
+  return LEGACY_ACT_KEYS[c] || c;
 }
-function customActTypes(){
-  const set = new Set();
-  state.activities.forEach(a=>{ if(hasActType(a) && !ACT_TYPES.some(t=>t.v===a.category)) set.add(a.category); });
-  return Array.from(set).sort((x,y)=>x.localeCompare(y,"fr"));
+function hasActType(a){ return !!actCat(a); }
+function actTypeList(){
+  const base = state.activityTypesReady
+    ? state.activityTypes.map(t=>({ id:t.id, name:t.name, icon:t.icon||"🏷️", virtual:false }))
+    : DEFAULT_ACT_TYPES.map(t=>({ id:t.name, name:t.name, icon:t.icon, virtual:true }));
+  const known = new Set(base.map(t=>personKey(t.name)));
+  state.activities.forEach(a=>{
+    const c = actCat(a);
+    if(c && !known.has(personKey(c))){ known.add(personKey(c)); base.push({ id:c, name:c, icon:"🏷️", virtual:true }); }
+  });
+  return base;
+}
+function actType(v){
+  const name = (!v || v==="autre") ? "" : (LEGACY_ACT_KEYS[v] || String(v).trim());
+  if(!name) return { name:"", label:"Non classé", icon:"📌", color:"#6B6485" };
+  const t = actTypeList().find(x=>personKey(x.name)===personKey(name));
+  let h = 0; for(const c of name) h = (h*31 + c.charCodeAt(0)) % ACT_COLORS.length;
+  return { name, label:name, icon: t ? t.icon : "🏷️", color: ACT_COLORS[h] };
 }
 function normalizeActType(text){
   const raw = String(text||"").trim().replace(/\s+/g," ");
   if(!raw) return "";
   const key = personKey(raw);
-  for(const t of ACT_TYPES){ if(personKey(t.label)===key || personKey(t.chip)===key || t.v===key) return t.v; }
-  for(const c of customActTypes()){ if(personKey(c)===key) return c; }
+  const found = actTypeList().find(t=>personKey(t.name)===key);
+  if(found) return found.name;
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 function attrJs(v){ return JSON.stringify(v).replace(/'/g,"&#39;"); }
+function legacyKeysFor(name){ return Object.keys(LEGACY_ACT_KEYS).filter(k=>LEGACY_ACT_KEYS[k]===name); }
+
+// ----- Gestion des types d'activités (renommer / supprimer / ajouter) -----
+function openTypesPanel(){ state.typesPanel = true; state.typeForm = null; state.typeDeleteConfirm = null; render(); }
+function closeTypesPanel(){ state.typesPanel = false; state.typeForm = null; state.typeDeleteConfirm = null; render(); }
+function openTypeEdit(i){
+  const t = actTypeList()[i];
+  if(!t) return;
+  state.typeDeleteConfirm = null;
+  state.typeForm = { index:i, name:t.name, icon:t.icon };
+  render();
+}
+function openTypeNew(){ state.typeDeleteConfirm = null; state.typeForm = { index:-1, name:"", icon:"🏷️" }; render(); }
+function cancelTypeForm(){ state.typeForm = null; render(); }
+async function reloadActivityData(){
+  const [types, acts] = await Promise.all([
+    sb("activity_types?select=*&order=created_at.asc").catch(()=>null),
+    sb("activities?select=*&order=activity_date.desc")
+  ]);
+  if(Array.isArray(types)){ state.activityTypes = types; state.activityTypesReady = true; }
+  state.activities = acts;
+}
+async function handleSaveType(){
+  if(!state.activityTypesReady){ alert("Pour gérer les types, exécute d'abord le fichier SQL « types-activites.sql » dans Supabase."); return; }
+  const raw = document.getElementById("tf-name").value.trim().replace(/\s+/g," ");
+  const icon = (document.getElementById("tf-icon").value.trim() || "🏷️").slice(0,8);
+  if(!raw){ alert("Écris le nom du type d'activité."); return; }
+  const name = raw.charAt(0).toUpperCase() + raw.slice(1);
+  const list = actTypeList();
+  const idx = state.typeForm.index;
+  if(list.some((t,i)=> i!==idx && personKey(t.name)===personKey(name))){ alert("Ce type existe déjà."); return; }
+  state.error = "";
+  try {
+    if(idx < 0){
+      await sb("activity_types", { method:"POST", body: JSON.stringify([{ name, icon }]) });
+    } else {
+      const t = list[idx];
+      const old = t.name;
+      if(t.virtual) await sb("activity_types", { method:"POST", body: JSON.stringify([{ name, icon }]) });
+      else await sb(`activity_types?id=eq.${t.id}`, { method:"PATCH", body: JSON.stringify({ name, icon }) });
+      if(old !== name){
+        await sb(`activities?category=eq.${encodeURIComponent(old)}`, { method:"PATCH", body: JSON.stringify({ category: name }) });
+        for(const k of legacyKeysFor(old)) await sb(`activities?category=eq.${encodeURIComponent(k)}`, { method:"PATCH", body: JSON.stringify({ category: name }) });
+        if(state.actFilter === old) state.actFilter = name;
+      }
+    }
+    await reloadActivityData();
+    state.typeForm = null;
+    render();
+  } catch(e){ state.error = "Erreur : " + e.message; render(); }
+}
+async function handleDeleteType(i){
+  if(!state.activityTypesReady){ alert("Pour gérer les types, exécute d'abord le fichier SQL « types-activites.sql » dans Supabase."); return; }
+  const t = actTypeList()[i];
+  if(!t) return;
+  state.error = "";
+  try {
+    await sb(`activities?category=eq.${encodeURIComponent(t.name)}`, { method:"PATCH", body: JSON.stringify({ category: null }) });
+    for(const k of legacyKeysFor(t.name)) await sb(`activities?category=eq.${encodeURIComponent(k)}`, { method:"PATCH", body: JSON.stringify({ category: null }) });
+    if(!t.virtual) await sb(`activity_types?id=eq.${t.id}`, { method:"DELETE" });
+    if(state.actFilter === t.name) state.actFilter = "all";
+    await reloadActivityData();
+    state.typeDeleteConfirm = null;
+    render();
+  } catch(e){ state.error = "Erreur : " + e.message; render(); }
+}
+function renderTypesModal(){
+  const list = actTypeList();
+  const count = name => state.activities.filter(a=>personKey(actCat(a))===personKey(name)).length;
+  const f = state.typeForm;
+  let inner;
+  if(f){
+    inner = `
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div><label class="label">Nom du type *</label><input id="tf-name" value="${esc(f.name)}" placeholder="Ex : Conférence, Concert..." /></div>
+        <div><label class="label">Icône (un emoji)</label><input id="tf-icon" value="${esc(f.icon)}" maxlength="8" style="font-size:20px;" /></div>
+        ${f.index>=0 && count(f.name)>0 ? `<p style="font-size:12px;color:var(--muted);margin:0;">Les ${count(f.name)} activité${count(f.name)>1?"s":""} de ce type seront renommée${count(f.name)>1?"s":""} automatiquement.</p>` : ""}
+        <div style="display:flex;gap:8px;"><button class="btn-teal" style="flex:1;" onclick="handleSaveType()">Enregistrer</button><button onclick="cancelTypeForm()" style="flex:1;background:var(--inputbg);border:none;border-radius:16px;padding:14px;font-weight:700;color:var(--muted);">Annuler</button></div>
+      </div>`;
+  } else {
+    const rows = list.map((t,i)=>{
+      const n = count(t.name);
+      const confirming = state.typeDeleteConfirm === i;
+      return `<div class="ledger-row" style="padding:12px 0;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:22px;">${esc(t.icon)}</span>
+          <div style="flex:1;min-width:0;"><div style="font-size:14px;font-weight:700;">${esc(t.name)}</div><div style="font-size:11px;color:var(--muted2);">${n} activité${n>1?"s":""}</div></div>
+          <button onclick="openTypeEdit(${i})" style="background:var(--inputbg);border:none;border-radius:10px;padding:8px 12px;font-size:12px;font-weight:700;color:var(--teal);">✏ Renommer</button>
+          <button onclick="state.typeDeleteConfirm=${i};render();" style="background:var(--inputbg);border:none;border-radius:10px;padding:8px 10px;font-size:13px;color:var(--coral);">🗑</button>
+        </div>
+        ${confirming ? `<div style="margin-top:10px;background:var(--inputbg);border-radius:12px;padding:12px;"><p style="font-size:12px;margin:0 0 10px;">Supprimer le type « ${esc(t.name)} » ?${n>0?` Les ${n} activité${n>1?"s":""} ne sont pas supprimée${n>1?"s":""} : elles passent dans « Non classées ».`:""}</p><div style="display:flex;gap:8px;"><button onclick="handleDeleteType(${i})" style="flex:1;background:var(--coral);border:none;border-radius:10px;padding:10px;font-size:12px;font-weight:700;color:#fff;">Oui, supprimer</button><button onclick="state.typeDeleteConfirm=null;render();" style="flex:1;background:none;border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;font-weight:700;color:var(--muted);">Non</button></div></div>` : ""}
+      </div>`;
+    }).join("");
+    inner = `
+      ${!state.activityTypesReady ? `<p style="font-size:12px;color:var(--coral);margin:0 0 12px;">Pour renommer ou supprimer les types, exécute d'abord le fichier SQL « types-activites.sql » dans Supabase.</p>` : ""}
+      <button class="btn-teal" style="width:100%;margin-bottom:8px;" onclick="openTypeNew()">+ Ajouter un type</button>
+      ${list.length===0 ? `<p style="font-size:13px;color:var(--muted);">Aucun type pour le moment.</p>` : rows}`;
+  }
+  return `
+    <div class="modal-overlay">
+      <div class="modal-panel glass-strong">
+        <div class="modal-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h2 class="font-display" style="font-size:18px;margin:0;">Types d'activités</h2>
+            <button onclick="closeTypesPanel()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
+          </div>
+          ${state.error ? `<p style="color:var(--coral);font-size:13px;margin:0 0 12px;">${esc(state.error)}</p>` : ""}
+          ${inner}
+        </div>
+        <div class="modal-footer"><button class="btn-gold" style="width:100%" onclick="closeTypesPanel()">Fermer</button></div>
+      </div>
+    </div>
+  `;
+}
+
 function daysUntil(dateStr){
   const m = String(dateStr||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
   if(!m) return null;
@@ -767,7 +912,7 @@ function openEditActivityById(id){
   if(a) openEditActivity(a);
 }
 function openEditActivity(a){
-  state.activityForm = { title:a.title||"", date:a.activity_date||"", time:(a.activity_time||"").slice(0,5), place:a.location||"", category:hasActType(a)?a.category:"", description:a.description||"" };
+  state.activityForm = { title:a.title||"", date:a.activity_date||"", time:(a.activity_time||"").slice(0,5), place:a.location||"", category:actCat(a), description:a.description||"" };
   state.activityPanel = a.id;
   render();
 }
@@ -780,11 +925,15 @@ async function handleSaveActivity(){
   let category = document.getElementById("act-cat").value;
   const description = document.getElementById("act-desc").value.trim();
   if(!title) return;
+  state.error = "";
   if(category === "__new__"){
     category = normalizeActType(document.getElementById("act-newtype").value);
     if(!category){ alert("Écris le nom du nouveau type d'activité."); return; }
+    if(state.activityTypesReady && !state.activityTypes.some(t=>personKey(t.name)===personKey(category))){
+      try { await sb("activity_types", { method:"POST", body: JSON.stringify([{ name: category, icon: "🏷️" }]) }); }
+      catch(e){ state.error = "Erreur d'enregistrement du type : " + e.message; render(); return; }
+    }
   }
-  state.error = "";
   const fields = { title, activity_date: date || null, activity_time: time || null, location: place || null, category: category || null, description };
   try {
     if(state.activityPanel === "new"){
@@ -792,7 +941,7 @@ async function handleSaveActivity(){
     } else {
       await sb(`activities?id=eq.${state.activityPanel}`, { method:"PATCH", body: JSON.stringify(fields) });
     }
-    state.activities = await sb("activities?select=*&order=activity_date.desc");
+    await reloadActivityData();
     state.activityPanel = null;
     render();
   } catch(e){ state.error = "Erreur d'enregistrement : " + e.message; render(); }
@@ -1249,6 +1398,7 @@ function renderMain(){
     ${state.panel==="attendance" ? renderAttendanceModal() : ""}
     ${state.panel==="whatsapp" ? renderWhatsAppModal() : ""}
     ${state.activityPanel ? renderActivityModal() : ""}
+    ${state.typesPanel ? renderTypesModal() : ""}
     ${state.eventPanel ? renderEventModal() : ""}
     ${state.adminPanel ? renderAdminModal() : ""}
     ${state.detailMember ? renderMemberDetailModal() : ""}
@@ -1706,8 +1856,7 @@ function renderActivityModal(){
             <div><label class="label">Type d'activité</label>
               <select id="act-cat" onchange="document.getElementById('act-newtype-wrap').style.display = this.value==='__new__' ? 'block' : 'none';" style="color:var(--text);background:var(--inputbg);border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:14px;width:100%;font-family:inherit;">
                 <option value="" ${!f.category?"selected":""}>— Choisir le type —</option>
-                ${ACT_TYPES.map(t=>`<option value="${t.v}" ${f.category===t.v?"selected":""}>${t.icon} ${esc(t.label)}</option>`).join("")}
-                ${customActTypes().map(c=>`<option value="${esc(c)}" ${f.category===c?"selected":""}>🏷️ ${esc(c)}</option>`).join("")}
+                ${actTypeList().map(t=>`<option value="${esc(t.name)}" ${personKey(f.category)===personKey(t.name)?"selected":""}>${esc(t.icon)} ${esc(t.name)}</option>`).join("")}
                 <option value="__new__">➕ Créer un nouveau type…</option>
               </select>
             </div>
@@ -1755,7 +1904,7 @@ function renderActivityCard(a, past){
 
 function renderActivitesTab(){
   const all = state.activities.slice();
-  const list = state.actFilter==="all" ? all : state.actFilter==="__none__" ? all.filter(a=>!hasActType(a)) : all.filter(a=>a.category===state.actFilter);
+  const list = state.actFilter==="all" ? all : state.actFilter==="__none__" ? all.filter(a=>!hasActType(a)) : all.filter(a=>personKey(actCat(a))===personKey(state.actFilter));
   const dated = x => x.activity_date;
   const upcoming = list.filter(a=>dated(a) && daysUntil(a.activity_date)>=0).sort((a,b)=>a.activity_date.localeCompare(b.activity_date) || (a.activity_time||"").localeCompare(b.activity_time||""));
   const past = list.filter(a=>dated(a) && daysUntil(a.activity_date)<0).sort((a,b)=>b.activity_date.localeCompare(a.activity_date));
@@ -1772,9 +1921,9 @@ function renderActivitesTab(){
     const on = state.actFilter===v;
     return `<button onclick='setActFilter(${attrJs(v)})' style="flex-shrink:0;border:none;border-radius:999px;padding:8px 13px;font-size:12px;font-weight:700;${on?"background:linear-gradient(135deg,var(--gold),var(--gold2));color:#16112A;":"background:var(--inputbg);color:var(--muted);"}">${icon?icon+" ":""}${esc(label)}</button>`;
   };
-  const chips = `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;">${chip("all","Toutes","")}${ACT_TYPES.map(t=>chip(t.v,t.chip,t.icon)).join("")}${customActTypes().map(c=>chip(c,c,"🏷️")).join("")}${all.some(a=>!hasActType(a))?chip("__none__","Non classées","📌"):""}</div>`;
+  const chips = `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;">${chip("all","Toutes","")}${actTypeList().map(t=>chip(t.name,t.name,t.icon)).join("")}${all.some(a=>!hasActType(a))?chip("__none__","Non classées","📌"):""}</div>`;
   const heading = t => `<h2 class="font-display" style="font-size:13px;color:var(--muted);margin:16px 0 8px;">${t}</h2>`;
-  let out = `<button class="btn-teal" style="width:100%;margin-bottom:14px;" onclick="openNewActivity()">+ Ajouter une activité</button>` + top + chips;
+  let out = `<div style="display:flex;gap:8px;margin-bottom:14px;"><button class="btn-teal" style="flex:1;" onclick="openNewActivity()">+ Ajouter une activité</button><button onclick="openTypesPanel()" style="background:var(--inputbg);border:none;border-radius:16px;padding:0 16px;font-size:13px;font-weight:700;color:var(--muted);">⚙️ Types</button></div>` + top + chips;
   if(all.length===0) return out + `<div class="glass" style="padding:24px;text-align:center;"><p class="font-display" style="font-size:16px;margin:0 0 4px;">Aucune activité enregistrée</p><p style="font-size:13px;color:var(--muted);margin:0;">Ajoute un mariage, un baptême, une retraite, une veillée de prière ou un programme spécial.</p></div>`;
   if(list.length===0) return out + `<div class="glass" style="padding:20px;text-align:center;"><p style="font-size:13px;color:var(--muted);margin:0;">Aucune activité de ce type.</p></div>`;
   if(upcoming.length>0) out += heading(`À venir (${upcoming.length})`) + upcoming.map(a=>renderActivityCard(a,false)).join("");
