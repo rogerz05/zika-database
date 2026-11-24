@@ -278,6 +278,9 @@ const state = {
   departments: [],
   members: [],
   memberEvents: [],
+  connexions: [],
+  announceId: null,
+  announceText: "",
   eventPanel: null,
   eventEditId: null,
   eventReturn: null,
@@ -372,16 +375,18 @@ function startPolling(){
         sb("member_events?select=*&order=event_date.desc"),
       ]);
       state.departments = depts; state.members = mems; state.memberEvents = evs;
+      const conns = await sb("connexions?select=*&order=created_at.desc&limit=100").catch(()=>null);
+      if(Array.isArray(conns)) state.connexions = conns;
       const activity = computeActivity();
       if(state.notifiedIds){
-        const newOnes = activity.filter(a => !state.notifiedIds.has(a.id) && a.by !== state.session.name);
+        const newOnes = activity.filter(a => a.kind !== "login" && !state.notifiedIds.has(a.id) && a.by !== state.session.name);
         if(newOnes.length > 0){
           showNotificationBanner(newOnes[0]);
           playNotificationSound();
         }
       }
       state.notifiedIds = new Set(activity.map(a=>a.id));
-      const modalOpen = state.panel || state.eventPanel || state.adminPanel || state.detailMember || state.activityPanel || state.typesPanel;
+      const modalOpen = state.panel || state.eventPanel || state.adminPanel || state.detailMember || state.activityPanel || state.typesPanel || state.announceId;
       if(!modalOpen) render();
     } catch(e){}
   }, 20000);
@@ -402,14 +407,16 @@ async function init(){
 }
 
 async function loadData(){
-  const [depts, mems, evs, att, acts, types] = await Promise.all([
+  const [depts, mems, evs, att, acts, types, conns] = await Promise.all([
     sb("departments?select=*&order=created_at.asc"),
     sb("members?select=*&order=added_at.desc"),
     sb("member_events?select=*&order=event_date.desc"),
     sb("attendance?select=*&order=attendance_date.desc"),
     sb("activities?select=*&order=activity_date.desc"),
     sb("activity_types?select=*&order=created_at.asc").catch(()=>null),
+    sb("connexions?select=*&order=created_at.desc&limit=100").catch(()=>[]),
   ]);
+  state.connexions = Array.isArray(conns) ? conns : [];
   if(Array.isArray(types)){ state.activityTypes = types; state.activityTypesReady = true; }
   else { state.activityTypes = []; state.activityTypesReady = false; }
   state.departments = depts;
@@ -939,6 +946,87 @@ function addActivityToCalendar(id){
   downloadBlob(new Blob([lines.join("\r\n")], { type:"text/calendar;charset=utf-8" }), "activite-" + exportFileName(a.title) + ".ics");
 }
 
+// ---------------- ANNONCE AU CONSEIL (WhatsApp / SMS) ----------------
+function buildAnnounceText(a){
+  const n = daysUntil(a.activity_date);
+  const prefix = n===1 ? "Demain, " : n===0 ? "Aujourd'hui, " : "";
+  const when = a.activity_date ? fmtLongDate(a.activity_date) : "";
+  const lines = ["📣 Rappel du Conseil", "", actType(a.category).icon + " " + a.title];
+  if(when) lines.push("📅 " + prefix + (prefix ? when.charAt(0).toLowerCase() + when.slice(1) : when) + (a.activity_time ? " · " + fmtTime(a.activity_time) : ""));
+  if(a.location) lines.push("📍 " + a.location);
+  lines.push("", "Merci d'être présents. Que Dieu vous bénisse !");
+  return lines.join("\n");
+}
+function councilNumbers(){
+  const dept = state.departments.find(d=>personKey(d.name)==="conseil");
+  if(!dept) return [];
+  const set = new Set();
+  state.members.filter(m=>m.dept_id===dept.id).forEach(m=>{ const n = waNumber(m.contact); if(n) set.add("+" + n); });
+  return Array.from(set);
+}
+function openAnnounce(id){
+  const a = state.activities.find(x=>String(x.id)===String(id));
+  if(!a) return;
+  state.announceId = a.id;
+  state.announceText = buildAnnounceText(a);
+  render();
+}
+function closeAnnounce(){ state.announceId = null; render(); }
+function announceMessage(){ const el = document.getElementById("an-text"); return (el ? el.value : state.announceText).trim(); }
+function announceWhatsApp(){
+  const t = announceMessage();
+  if(!t){ alert("Le message est vide."); return; }
+  window.open("https://wa.me/?text=" + encodeURIComponent(t), "_blank");
+}
+function announceSms(){
+  const t = announceMessage();
+  const nums = councilNumbers();
+  if(!t){ alert("Le message est vide."); return; }
+  if(nums.length === 0){ alert("Aucun membre de la rubrique « Conseil » n'a de numéro valide."); return; }
+  window.location.href = "sms:" + nums.join(",") + "?body=" + encodeURIComponent(t);
+}
+async function announceCopy(){
+  const t = announceMessage();
+  try { await navigator.clipboard.writeText(t); alert("Message copié."); }
+  catch(e){ const el = document.getElementById("an-text"); if(el){ el.select(); document.execCommand && document.execCommand("copy"); alert("Message copié."); } }
+}
+function checkAnnounceHash(){
+  const m = String(location.hash||"").match(/^#annonce-(.+)$/);
+  if(!m || state.phase !== "app") return;
+  const id = decodeURIComponent(m[1]);
+  const a = state.activities.find(x=>String(x.id)===String(id));
+  try { history.replaceState(null, "", location.pathname + location.search); } catch(e) {}
+  if(a){ state.tab = "activites"; state.actView = "list"; openAnnounce(id); }
+}
+window.addEventListener("hashchange", checkAnnounceHash);
+function renderAnnounceModal(){
+  const a = state.activities.find(x=>String(x.id)===String(state.announceId));
+  if(!a) return "";
+  const nums = councilNumbers();
+  return `
+    <div class="modal-overlay">
+      <div class="modal-panel glass-strong">
+        <div class="modal-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <h2 class="font-display" style="font-size:18px;margin:0;">📣 Annoncer au Conseil</h2>
+            <button onclick="closeAnnounce()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
+          </div>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">${esc(a.title)}${a.activity_date ? " · " + esc(fmtDateFr(a.activity_date)) : ""}</p>
+          <label class="label">Message (tu peux le modifier)</label>
+          <textarea id="an-text" rows="8" oninput="state.announceText=this.value" style="width:100%;">${esc(state.announceText)}</textarea>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px;">
+            <button onclick="announceWhatsApp()" style="background:#25D366;color:#073B1B;border:none;border-radius:16px;padding:14px;font-size:14px;font-weight:700;">💬 Envoyer sur WhatsApp</button>
+            <p style="font-size:11px;color:var(--muted2);margin:-2px 0 4px;">WhatsApp s'ouvre : choisis le groupe du Conseil, puis envoie.</p>
+            <button onclick="announceSms()" class="btn-teal" style="width:100%;">✉️ SMS à tout le Conseil${nums.length ? " (" + nums.length + ")" : ""}</button>
+            <button onclick="announceCopy()" style="background:var(--inputbg);border:none;border-radius:16px;padding:12px;font-size:13px;font-weight:700;color:var(--muted);">📋 Copier le message</button>
+          </div>
+        </div>
+        <div class="modal-footer"><button class="btn-gold" style="width:100%" onclick="closeAnnounce()">Fermer</button></div>
+      </div>
+    </div>
+  `;
+}
+
 function openNewActivity(){
   state.activityForm = { title:"", date:"", time:"", place:"", category: (state.actFilter!=="all" && state.actFilter!=="__none__") ? state.actFilter : "", description:"" };
   state.activityPanel = "new";
@@ -1046,12 +1134,14 @@ async function handleLogin(){
     const found = admins.find(a => a.code === code);
     if(!found){ state.error = "Code invalide."; render(); return; }
     state.session = found;
+    try { await sb("connexions", { method:"POST", body: JSON.stringify([{ admin_id: String(found.id), admin_name: found.name }]) }); } catch(e) {}
     await loadData();
     state.notifiedIds = new Set(computeActivity().map(a=>a.id));
     startPolling();
     state.phase = "app";
     state.tab = "journal";
     render();
+    checkAnnounceHash();
   } catch(e){ state.error = "Erreur de connexion : " + e.message; render(); }
 }
 
@@ -1076,6 +1166,9 @@ function computeActivity(){
     const dept = state.departments.find(d=>d.id===m.dept_id);
     if(m.added_at) items.push({ id:`${m.id}_add`, at:m.added_at, isEdit:false, by:m.added_by, text:`a ajouté ${m.name}${dept?` dans "${dept.name}"`:""}` });
     if(m.updated_at && m.updated_at !== m.added_at) items.push({ id:`${m.id}_upd`, at:m.updated_at, isEdit:true, by:m.updated_by||m.added_by, text:`a modifié la fiche de ${m.name}` });
+  }
+  for(const c of (state.connexions||[])){
+    if(c.created_at) items.push({ id:`conn_${c.id}`, at:c.created_at, isEdit:false, kind:"login", by:c.admin_name, text:"s'est connecté(e) à l'application" });
   }
   items.sort((a,b)=> new Date(b.at)-new Date(a.at));
   return items;
@@ -1244,7 +1337,7 @@ function renderLogin(){
 
 function renderMain(){
   const activity = computeActivity();
-  const unseen = activity.filter(a => !state.session.last_seen || new Date(a.at) > new Date(state.session.last_seen)).length;
+  const unseen = activity.filter(a => a.kind !== "login" && (!state.session.last_seen || new Date(a.at) > new Date(state.session.last_seen))).length;
   const isMain = state.session.role === "main";
 
   let title = "Journal d'activité";
@@ -1260,7 +1353,7 @@ function renderMain(){
         activity.map(a=>{ const c = adminColorFor(a.by); return `
           <div class="ledger-row" style="padding:14px 16px;display:flex;gap:12px;">
             <div style="width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${hexToRgba(c,0.15)}">
-              <div style="width:8px;height:8px;border-radius:50%;background:${c}"></div>
+              ${a.kind==="login" ? `<span style="font-size:14px;">🔑</span>` : `<div style="width:8px;height:8px;border-radius:50%;background:${c}"></div>`}
             </div>
             <div style="flex:1;min-width:0;">
               <p style="font-size:14px;margin:0;"><span style="font-weight:600;color:${c}">${esc(a.by)}</span> ${esc(a.text)}</p>
@@ -1436,6 +1529,7 @@ function renderMain(){
     ${state.panel==="whatsapp" ? renderWhatsAppModal() : ""}
     ${state.activityPanel ? renderActivityModal() : ""}
     ${state.typesPanel ? renderTypesModal() : ""}
+    ${state.announceId ? renderAnnounceModal() : ""}
     ${state.eventPanel ? renderEventModal() : ""}
     ${state.adminPanel ? renderAdminModal() : ""}
     ${state.detailMember ? renderMemberDetailModal() : ""}
@@ -1993,6 +2087,7 @@ function renderActivityCard(a, past){
       </div>
     </div>
     <div style="display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid rgba(43,30,90,0.08);">
+      ${a.activity_date && !past ? `<button onclick="openAnnounce('${a.id}')" style="background:var(--inputbg);border:none;border-radius:10px;padding:8px 14px;font-size:12px;font-weight:700;color:var(--violet);">📣 Annoncer</button>` : ""}
       ${a.activity_date && !past ? `<button onclick="addActivityToCalendar('${a.id}')" style="background:var(--inputbg);border:none;border-radius:10px;padding:8px 14px;font-size:12px;font-weight:700;color:#8B6A00;">⏰ Rappel</button>` : ""}
       <button onclick="openEditActivityById('${a.id}')" style="background:var(--inputbg);border:none;border-radius:10px;padding:8px 14px;font-size:12px;font-weight:700;color:var(--teal);">✏ Modifier</button>
       ${confirming ?
