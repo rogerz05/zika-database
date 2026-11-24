@@ -190,7 +190,10 @@ function describeChange(path, opts){
       const m = state.members.find(x=>String(x.id)===String(body.member_id));
       return `a ajouté un événement${m ? " pour " + q(m.name) : ""}`;
     }
-    if(method === "DELETE") return "a supprimé un événement";
+    const ev = id ? state.memberEvents.find(x=>String(x.id)===String(id)) : null;
+    const em = ev ? state.members.find(x=>String(x.id)===String(ev.member_id)) : null;
+    if(method === "PATCH") return `a modifié l'actualité${em ? " de " + q(em.name) : ""}`;
+    if(method === "DELETE") return `a supprimé l'actualité${ev ? " " + eventLabel(ev.type) : ""}${em ? " de " + q(em.name) : ""}`;
     return null;
   }
   if(table === "departments"){
@@ -276,6 +279,8 @@ const state = {
   members: [],
   memberEvents: [],
   eventPanel: null,
+  eventEditId: null,
+  eventReturn: null,
   eventForm: {type:"",event_date:"",note:""},
   adminPanel: null, // null | "new" | admin id being edited
   adminForm: {name:"",code:""},
@@ -300,6 +305,8 @@ const state = {
   activityForm: {title:"", date:"", time:"", place:"", category:"autre", description:""},
   actFilter: "all",
   actShowPast: false,
+  actView: "list",
+  actYear: "auto",
   activityTypes: [],
   activityTypesReady: false,
   typesPanel: false,
@@ -423,23 +430,52 @@ function eventLabel(key){ const t=EVENT_TYPES.find(t=>t.key===key); return t ? `
 function memberEventsFor(id){
   return state.memberEvents.filter(e=>e.member_id===id).sort((a,b)=> new Date(b.event_date)-new Date(a.event_date));
 }
-function openEventPanel(memberId){ state.eventPanel = memberId; state.eventForm = {type:"",event_date:"",note:""}; render(); }
-function closeEventPanel(){ state.eventPanel = null; render(); }
+function openEventPanel(memberId){ state.eventEditId = null; state.eventReturn = null; state.eventPanel = memberId; state.eventForm = {type:"",event_date:"",note:""}; render(); }
+function openEditEvent(id, fromDetail){
+  const e = state.memberEvents.find(x=>String(x.id)===String(id));
+  if(!e) return;
+  state.eventReturn = fromDetail ? state.detailMember : null;
+  state.detailMember = null;
+  state.confirmDelete = null;
+  state.eventEditId = e.id;
+  state.eventForm = { type:e.type||"", event_date:String(e.event_date||"").slice(0,10), note:e.note||"" };
+  state.eventPanel = e.member_id;
+  render();
+}
+function closeEventPanel(){
+  state.eventPanel = null; state.eventEditId = null;
+  if(state.eventReturn){ state.detailMember = state.eventReturn; state.eventReturn = null; }
+  render();
+}
 async function handleSaveEvent(){
   const type = document.getElementById("ev-type").value;
   const date = document.getElementById("ev-date").value;
   const note = document.getElementById("ev-note").value.trim();
   if(!type || !date) return;
   try {
-    await sb("member_events", { method:"POST", body: JSON.stringify([{ member_id: state.eventPanel, type, event_date: date, note, created_by: state.session.name }]) });
+    if(state.eventEditId){
+      await sb(`member_events?id=eq.${state.eventEditId}`, { method:"PATCH", body: JSON.stringify({ type, event_date: date, note }) });
+    } else {
+      await sb("member_events", { method:"POST", body: JSON.stringify([{ member_id: state.eventPanel, type, event_date: date, note, created_by: state.session.name }]) });
+    }
     state.memberEvents = await sb("member_events?select=*&order=event_date.desc");
-    state.eventPanel = null;
+    state.eventPanel = null; state.eventEditId = null;
+    if(state.eventReturn){ state.detailMember = state.eventReturn; state.eventReturn = null; }
     render();
   } catch(e){ state.error = "Erreur d'enregistrement : " + e.message; render(); }
 }
 async function handleDeleteEvent(id){
-  try { await sb(`member_events?id=eq.${id}`, { method:"DELETE" }); state.memberEvents = await sb("member_events?select=*&order=event_date.desc"); render(); }
-  catch(e){ state.error = e.message; render(); }
+  try {
+    await sb(`member_events?id=eq.${id}`, { method:"DELETE" });
+    state.memberEvents = await sb("member_events?select=*&order=event_date.desc");
+    state.confirmDelete = null;
+    render();
+  } catch(e){ state.error = "Erreur de suppression : " + e.message; state.confirmDelete = null; render(); }
+}
+function eventActions(e, fromDetail){
+  const confirming = state.confirmDelete && state.confirmDelete.type==="event" && String(state.confirmDelete.id)===String(e.id);
+  if(confirming) return `<span style="display:flex;gap:8px;align-items:center;font-size:12px;"><span style="color:var(--muted);">Supprimer ?</span><button onclick="handleDeleteEvent('${e.id}')" style="background:var(--coral);border:none;border-radius:10px;padding:7px 12px;font-size:12px;font-weight:700;color:#fff;">Oui</button><button onclick="state.confirmDelete=null;render();" style="background:var(--inputbg);border:none;border-radius:10px;padding:7px 12px;font-size:12px;font-weight:700;color:var(--muted);">Non</button></span>`;
+  return `<span style="display:flex;gap:6px;"><button onclick="openEditEvent('${e.id}',${fromDetail?"true":"false"})" style="background:var(--inputbg);border:none;border-radius:10px;padding:7px 12px;font-size:12px;font-weight:700;color:var(--teal);">✏ Modifier</button><button onclick="state.confirmDelete={type:'event',id:'${e.id}'};render();" style="background:var(--inputbg);border:none;border-radius:10px;padding:7px 10px;font-size:12px;color:var(--coral);">🗑</button></span>`;
 }
 
 // ---------------- STATISTIQUES ----------------
@@ -719,7 +755,8 @@ function actType(v){
   if(!name) return { name:"", label:"Non classé", icon:"📌", color:"#6B6485" };
   const t = actTypeList().find(x=>personKey(x.name)===personKey(name));
   let h = 0; for(const c of name) h = (h*31 + c.charCodeAt(0)) % ACT_COLORS.length;
-  return { name, label:name, icon: t ? t.icon : "🏷️", color: ACT_COLORS[h] };
+  const canon = t ? t.name : name;
+  return { name: canon, label: canon, icon: t ? t.icon : "🏷️", color: ACT_COLORS[h] };
 }
 function normalizeActType(text){
   const raw = String(text||"").trim().replace(/\s+/g," ");
@@ -1426,9 +1463,9 @@ function renderMemberList(list){
           </div>
           <p style="font-size:11px;color:var(--muted2);margin:8px 0 0;">Ajouté par ${esc(m.added_by||"")} · ${timeAgo(m.added_at)}</p>
           ${memberEventsFor(m.id).length>0 ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(43,30,90,0.08);display:flex;flex-direction:column;gap:6px;">${memberEventsFor(m.id).map(e=>`
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-              <div style="font-size:13px;"><span style="font-weight:600;color:var(--violet)">${eventLabel(e.type)}</span> <span style="color:var(--muted2)">· ${esc(e.event_date)}</span>${e.note?`<br><span style="color:var(--muted)">${esc(e.note)}</span>`:""}</div>
-              <button onclick="handleDeleteEvent('${e.id}')" style="background:none;border:none;color:var(--coral);font-size:12px;flex-shrink:0;">✕</button>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+              <div style="font-size:13px;min-width:0;"><span style="font-weight:600;color:var(--violet)">${eventLabel(e.type)}</span> <span style="color:var(--muted2)">· ${esc(fmtDateFr(e.event_date))}</span>${e.note?`<br><span style="color:var(--muted)">${esc(e.note)}</span>`:""}</div>
+              ${eventActions(e,false)}
             </div>
           `).join("")}</div>` : ""}
           <div style="display:flex;gap:14px;margin-top:10px;flex-wrap:wrap;">
@@ -1471,8 +1508,9 @@ function renderMemberDetailModal(){
               <p class="label" style="margin:0 0 8px;">Actualités</p>
               <div class="glass" style="overflow:hidden;">${memberEventsFor(m.id).map(e=>`
                 <div class="ledger-row" style="padding:12px 14px;">
-                  <p style="font-size:14px;margin:0;"><span style="font-weight:600;color:var(--violet)">${eventLabel(e.type)}</span> <span style="color:var(--muted2);font-size:12px;">· ${esc(e.event_date)}</span></p>
+                  <p style="font-size:14px;margin:0;"><span style="font-weight:600;color:var(--violet)">${eventLabel(e.type)}</span> <span style="color:var(--muted2);font-size:12px;">· ${esc(fmtDateFr(e.event_date))}</span></p>
                   ${e.note?`<p style="font-size:13px;color:var(--muted);margin:4px 0 0;">${esc(e.note)}</p>`:""}
+                  <div style="display:flex;justify-content:flex-end;margin-top:8px;">${eventActions(e,true)}</div>
                 </div>
               `).join("")}</div>
             </div>` : ""}
@@ -1775,7 +1813,7 @@ function renderEventModal(){
       <div class="modal-panel glass-strong">
         <div class="modal-body">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-            <h2 class="font-display" style="font-size:18px;margin:0;">Nouvelle actualité</h2>
+            <h2 class="font-display" style="font-size:18px;margin:0;">${state.eventEditId ? "Modifier l'actualité" : "Nouvelle actualité"}</h2>
             <button onclick="closeEventPanel()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
           </div>
           <div style="display:flex;flex-direction:column;gap:12px;">
@@ -1783,11 +1821,11 @@ function renderEventModal(){
               <label class="label">Type d'événement *</label>
               <select id="ev-type" style="color:var(--text);background:var(--inputbg);border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:14px;width:100%;font-family:inherit;">
                 <option value="">Choisir...</option>
-                ${EVENT_TYPES.map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}
+                ${EVENT_TYPES.map(t=>`<option value="${t.key}" ${state.eventForm.type===t.key?"selected":""}>${t.icon} ${t.label}</option>`).join("")}
               </select>
             </div>
-            <div><label class="label">Date *</label><input id="ev-date" type="date" /></div>
-            <div><label class="label">Note</label><textarea id="ev-note" rows="3" placeholder="Détails (facultatif)..."></textarea></div>
+            <div><label class="label">Date *</label><input id="ev-date" type="date" value="${esc(state.eventForm.event_date)}" /></div>
+            <div><label class="label">Note</label><textarea id="ev-note" rows="3" placeholder="Détails (facultatif)...">${esc(state.eventForm.note)}</textarea></div>
           </div>
         </div>
         <div class="modal-footer"><button class="btn-teal" style="width:100%" onclick="handleSaveEvent()">Enregistrer</button></div>
@@ -1876,6 +1914,68 @@ function renderActivityModal(){
   `;
 }
 
+function setActView(v){ state.actView = v; render(); }
+function setActYear(y){ state.actYear = y; render(); }
+function actYears(){
+  const set = new Set();
+  state.activities.forEach(a=>{ const m = String(a.activity_date||"").match(/^(\d{4})/); if(m) set.add(m[1]); });
+  return Array.from(set).sort().reverse();
+}
+function renderActivityStats(){
+  const years = actYears();
+  const thisYear = String(new Date().getFullYear());
+  let yr = state.actYear;
+  if(yr === "auto") yr = years.includes(thisYear) ? thisYear : (years[0] || "all");
+  const sel = yr === "all" ? state.activities.slice() : state.activities.filter(a=>String(a.activity_date||"").startsWith(yr + "-"));
+  const total = sel.length;
+  const chip = (v,label) => `<button onclick="setActYear('${v}')" style="flex-shrink:0;border:none;border-radius:999px;padding:8px 14px;font-size:12px;font-weight:700;${yr===v?"background:linear-gradient(135deg,var(--gold),var(--gold2));color:#16112A;":"background:var(--inputbg);color:var(--muted);"}">${label}</button>`;
+  const chips = `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;">${chip("all","Toutes les années")}${years.map(y=>chip(y,y)).join("")}</div>`;
+  if(total === 0) return chips + `<div class="glass" style="padding:20px;text-align:center;"><p style="font-size:14px;color:var(--muted);margin:0;">Aucune activité ${yr==="all"?"enregistrée":"en "+yr}.</p></div>`;
+  const map = new Map();
+  sel.forEach(a=>{
+    const t = actType(actCat(a));
+    const key = personKey(t.name);
+    if(!map.has(key)) map.set(key, { name:t.name, label:t.label, icon:t.icon, color:t.color, count:0 });
+    map.get(key).count++;
+  });
+  const groups = Array.from(map.values()).sort((x,y)=>y.count-x.count);
+  const pct = n => Math.round(n/total*100);
+  const sub = t => `<div style="font-size:11px;color:var(--muted2);margin-top:2px;">${t}</div>`;
+  const stat = (label,val,extra) => `<div class="glass" style="flex:1;padding:10px 12px;min-width:0;"><div style="font-size:11px;color:var(--muted);">${label}</div><div class="font-display" style="font-size:20px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${val}</div>${extra}</div>`;
+  const top = groups[0];
+  const cards = `<div style="display:flex;gap:8px;margin-bottom:12px;">${
+    stat("Activités", total, sub(yr==="all" ? "toutes années" : "en " + yr))
+  }${
+    stat("Type principal", esc(top.icon + " " + top.label), sub(`${top.count} · ${pct(top.count)} %`))
+  }${
+    stat("Types", groups.length, sub("différents"))
+  }</div>`;
+
+  const shown = groups.slice(0,8);
+  const H = 120, mx = Math.max(1, ...shown.map(g=>g.count));
+  const bars = shown.map(g=>`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:0;"><span style="font-size:11px;color:var(--muted);margin-bottom:3px;">${g.count}</span><div style="width:100%;max-width:30px;height:${Math.max(4,Math.round(g.count/mx*H))}px;background:${g.color};border-radius:6px 6px 0 0;"></div></div>`).join("");
+  const labels = shown.map(g=>`<span style="flex:1;text-align:center;font-size:10px;color:var(--muted2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(g.icon)}</span>`).join("");
+  const chart = `<div class="glass" style="padding:14px;margin-bottom:12px;"><div class="font-display" style="font-size:14px;margin-bottom:10px;">Activités par type${groups.length>8?" (8 premiers)":""}</div><div style="display:flex;align-items:flex-end;gap:4px;height:${H+22}px;border-bottom:1px solid var(--border);">${bars}</div><div style="display:flex;gap:4px;margin-top:5px;">${labels}</div></div>`;
+
+  const topSeg = groups.slice(0,5), restCount = total - topSeg.reduce((n,g)=>n+g.count,0);
+  const segs = topSeg.map(g=>`<div style="width:${pct(g.count)}%;background:${g.color};"></div>`).join("");
+  const legend = topSeg.map(g=>`<span style="display:flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:${g.color};display:inline-block;"></span>${esc(g.label)} <b>${pct(g.count)} %</b></span>`).join("") + (restCount>0 ? `<span style="display:flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:var(--inputbg);border:1px solid var(--border);display:inline-block;"></span>Autres types <b>${pct(restCount)} %</b></span>` : "");
+  const split = `<div class="glass" style="padding:14px;margin-bottom:12px;"><div class="font-display" style="font-size:14px;margin-bottom:10px;">Répartition en %</div><div style="display:flex;height:14px;border-radius:99px;overflow:hidden;background:var(--inputbg);">${segs}</div><div style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted);margin-top:8px;">${legend}</div></div>`;
+
+  let months = "";
+  if(yr !== "all"){
+    const mc = new Array(12).fill(0);
+    sel.forEach(a=>{ const m = String(a.activity_date||"").match(/^\d{4}-(\d{2})/); if(m) mc[+m[1]-1]++; });
+    const mm = Math.max(1, ...mc), ML = ["J","F","M","A","M","J","J","A","S","O","N","D"];
+    months = `<div class="glass" style="padding:14px;margin-bottom:12px;"><div class="font-display" style="font-size:14px;margin-bottom:10px;">Activités par mois en ${yr}</div><div style="display:flex;align-items:flex-end;gap:4px;height:${90+20}px;border-bottom:1px solid var(--border);">${mc.map(n=>`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;"><span style="font-size:10px;color:var(--muted);margin-bottom:2px;">${n>0?n:""}</span><div style="width:100%;max-width:22px;height:${n>0?Math.max(4,Math.round(n/mm*90)):0}px;background:linear-gradient(180deg,var(--gold),var(--gold2));border-radius:5px 5px 0 0;"></div></div>`).join("")}</div><div style="display:flex;gap:4px;margin-top:5px;">${ML.map(l=>`<span style="flex:1;text-align:center;font-size:10px;color:var(--muted2);">${l}</span>`).join("")}</div></div>`;
+  }
+
+  const rows = groups.map(g=>`<div class="ledger-row" style="display:flex;align-items:center;gap:8px;padding:10px 14px;"><span style="width:10px;height:10px;border-radius:50%;background:${g.color};flex-shrink:0;"></span><span style="flex:1;font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(g.icon)} ${esc(g.label)}</span><span style="font-size:13px;font-weight:700;min-width:26px;text-align:right;">${g.count}</span><span style="font-size:11px;color:var(--muted2);min-width:40px;text-align:right;">${pct(g.count)} %</span></div>`).join("");
+  const undated = yr==="all" ? state.activities.filter(a=>!a.activity_date).length : 0;
+  const detail = `<div class="glass" style="overflow:hidden;"><div class="font-display" style="font-size:14px;padding:14px 14px 4px;">Détail par type${yr==="all"?"":" — "+yr}</div>${rows}${undated>0?`<p style="font-size:11px;color:var(--muted2);margin:0;padding:6px 14px 12px;">${undated} activité${undated>1?"s":""} sans date ${undated>1?"sont comptées":"est comptée"} uniquement dans « Toutes les années ».</p>`:""}</div>`;
+  return chips + cards + chart + split + months + detail;
+}
+
 function renderActivityCard(a, past){
   const t = actType(a.category);
   const n = daysUntil(a.activity_date);
@@ -1923,7 +2023,11 @@ function renderActivitesTab(){
   };
   const chips = `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;">${chip("all","Toutes","")}${actTypeList().map(t=>chip(t.name,t.name,t.icon)).join("")}${all.some(a=>!hasActType(a))?chip("__none__","Non classées","📌"):""}</div>`;
   const heading = t => `<h2 class="font-display" style="font-size:13px;color:var(--muted);margin:16px 0 8px;">${t}</h2>`;
-  let out = `<div style="display:flex;gap:8px;margin-bottom:14px;"><button class="btn-teal" style="flex:1;" onclick="openNewActivity()">+ Ajouter une activité</button><button onclick="openTypesPanel()" style="background:var(--inputbg);border:none;border-radius:16px;padding:0 16px;font-size:13px;font-weight:700;color:var(--muted);">⚙️ Types</button></div>` + top + chips;
+  const head = `<div style="display:flex;gap:8px;margin-bottom:12px;"><button class="btn-teal" style="flex:1;" onclick="openNewActivity()">+ Ajouter une activité</button><button onclick="openTypesPanel()" style="background:var(--inputbg);border:none;border-radius:16px;padding:0 16px;font-size:13px;font-weight:700;color:var(--muted);">⚙️ Types</button></div>`;
+  const seg = (v,label) => `<button onclick="setActView('${v}')" style="flex:1;border:none;border-radius:12px;padding:10px;font-size:13px;font-weight:700;${state.actView===v?"background:#fff;color:#16112A;box-shadow:0 2px 8px rgba(43,30,90,0.12);":"background:transparent;color:var(--muted);"}">${label}</button>`;
+  const toggle = `<div style="display:flex;gap:4px;background:var(--inputbg);border-radius:14px;padding:4px;margin-bottom:14px;">${seg("list","📋 Liste")}${seg("stats","📊 Statistiques")}</div>`;
+  if(state.actView === "stats") return head + toggle + renderActivityStats();
+  let out = head + toggle + top + chips;
   if(all.length===0) return out + `<div class="glass" style="padding:24px;text-align:center;"><p class="font-display" style="font-size:16px;margin:0 0 4px;">Aucune activité enregistrée</p><p style="font-size:13px;color:var(--muted);margin:0;">Ajoute un mariage, un baptême, une retraite, une veillée de prière ou un programme spécial.</p></div>`;
   if(list.length===0) return out + `<div class="glass" style="padding:20px;text-align:center;"><p style="font-size:13px;color:var(--muted);margin:0;">Aucune activité de ce type.</p></div>`;
   if(upcoming.length>0) out += heading(`À venir (${upcoming.length})`) + upcoming.map(a=>renderActivityCard(a,false)).join("");
