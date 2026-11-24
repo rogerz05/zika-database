@@ -170,7 +170,7 @@ function describeChange(path, opts){
   }
   if(table === "activities"){
     const a = id ? state.activities.find(x=>String(x.id)===String(id)) : null;
-    if(method === "POST" && body) return `a ajouté l'activité ${q(body.title)}`;
+    if(method === "POST" && body) return `a ajouté l'activité ${q(body.title)}${body.activity_date ? " du " + fmtDateFr(body.activity_date) : ""}`;
     if(method === "PATCH") return `a modifié l'activité ${q((body && body.title) || (a && a.title) || "")}`;
     if(method === "DELETE") return `a supprimé l'activité ${q(a ? a.title : "")}`;
     return null;
@@ -287,7 +287,9 @@ const state = {
   attendanceForm: {date:"", men:"", women:""},
   activities: [],
   activityPanel: null,
-  activityForm: {title:"", date:"", description:""},
+  activityForm: {title:"", date:"", time:"", place:"", category:"autre", description:""},
+  actFilter: "all",
+  actShowPast: false,
   newDeptName: "",
   confirmDelete: null,
   error: "",
@@ -668,13 +670,45 @@ async function handleDeleteAttendance(id){
 }
 
 // ---------------- ACTIVITÉS DE L'ÉGLISE ----------------
+const ACT_TYPES = [
+  { v:"mariage",  label:"Mariage",               chip:"Mariages",  icon:"💍", color:"var(--coral)" },
+  { v:"bapteme",  label:"Baptême",               chip:"Baptêmes",  icon:"💧", color:"var(--blue)" },
+  { v:"retraite", label:"Sortie / Retraite jeunes", chip:"Jeunes",  icon:"🏕️", color:"var(--teal)" },
+  { v:"priere",   label:"Prière / Veillée",      chip:"Prières",   icon:"🙏", color:"var(--violet)" },
+  { v:"special",  label:"Programme spécial",     chip:"Spéciaux",  icon:"⭐", color:"var(--gold)" },
+  { v:"autre",    label:"Autre",                 chip:"Autres",    icon:"📌", color:"#6B6485" }
+];
+function actType(v){ return ACT_TYPES.find(t=>t.v===v) || ACT_TYPES[ACT_TYPES.length-1]; }
+function daysUntil(dateStr){
+  const m = String(dateStr||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return null;
+  const t = new Date();
+  return Math.round((Date.UTC(+m[1],+m[2]-1,+m[3]) - Date.UTC(t.getFullYear(),t.getMonth(),t.getDate())) / 86400000);
+}
+function fmtLongDate(dateStr){
+  const m = String(dateStr||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return "";
+  const txt = new Date(+m[1],+m[2]-1,+m[3]).toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+  return txt.charAt(0).toUpperCase() + txt.slice(1);
+}
+function relDays(n){
+  if(n===null) return "";
+  if(n===0) return "Aujourd'hui";
+  if(n===1) return "Demain";
+  if(n===-1) return "Hier";
+  return n>1 ? `Dans ${n} jours` : `Il y a ${-n} jours`;
+}
+function fmtTime(t){ const m = String(t||"").match(/^(\d{1,2}):(\d{2})/); return m ? `${+m[1]}h${m[2]}` : ""; }
+function setActFilter(v){ state.actFilter = v; state.actShowPast = false; render(); }
+function toggleActPast(){ state.actShowPast = !state.actShowPast; render(); }
+
 function openNewActivity(){
-  state.activityForm = {title:"", date:"", description:""};
+  state.activityForm = { title:"", date:"", time:"", place:"", category: state.actFilter!=="all" ? state.actFilter : "autre", description:"" };
   state.activityPanel = "new";
   render();
 }
 function openEditActivity(a){
-  state.activityForm = { title:a.title||"", date:a.activity_date||"", description:a.description||"" };
+  state.activityForm = { title:a.title||"", date:a.activity_date||"", time:(a.activity_time||"").slice(0,5), place:a.location||"", category:a.category||"autre", description:a.description||"" };
   state.activityPanel = a.id;
   render();
 }
@@ -682,14 +716,18 @@ function closeActivityPanel(){ state.activityPanel = null; render(); }
 async function handleSaveActivity(){
   const title = document.getElementById("act-title").value.trim();
   const date = document.getElementById("act-date").value;
+  const time = document.getElementById("act-time").value;
+  const place = document.getElementById("act-place").value.trim();
+  const category = document.getElementById("act-cat").value;
   const description = document.getElementById("act-desc").value.trim();
   if(!title) return;
   state.error = "";
+  const fields = { title, activity_date: date || null, activity_time: time || null, location: place || null, category, description };
   try {
     if(state.activityPanel === "new"){
-      await sb("activities", { method:"POST", body: JSON.stringify([{ title, activity_date: date || null, description, created_by: state.session.name }]) });
+      await sb("activities", { method:"POST", body: JSON.stringify([{ ...fields, created_by: state.session.name }]) });
     } else {
-      await sb(`activities?id=eq.${state.activityPanel}`, { method:"PATCH", body: JSON.stringify({ title, activity_date: date || null, description }) });
+      await sb(`activities?id=eq.${state.activityPanel}`, { method:"PATCH", body: JSON.stringify(fields) });
     }
     state.activities = await sb("activities?select=*&order=activity_date.desc");
     state.activityPanel = null;
@@ -963,7 +1001,8 @@ function renderMain(){
   let title = "Journal d'activité";
   if(state.tab==="rubriques"){
     title = state.selectedDept ? (state.departments.find(d=>d.id===state.selectedDept)?.name || "") : "Rubriques";
-  } else if(state.tab==="admin"){ title = "Administration"; }
+  } else if(state.tab==="activites"){ title = "Activités"; }
+  else if(state.tab==="admin"){ title = "Administration"; }
 
   let body = "";
   if(state.tab === "journal"){
@@ -1011,6 +1050,8 @@ function renderMain(){
       </div>
       <div id="member-list">${renderMemberList(list)}</div>
     `;
+  } else if(state.tab === "activites"){
+    body = renderActivitesTab();
   } else if(state.tab === "admin"){
     const gStats = genderStats();
     const lStats = locationStats();
@@ -1055,30 +1096,6 @@ function renderMain(){
                   ${m.depts.length>0?`<p style="font-size:11px;color:var(--muted2);margin:2px 0 0;">${m.depts.map(esc).join(", ")}</p>`:""}
                 </div>
                 <button onclick='openEditMember(${JSON.stringify(m).replace(/'/g,"&#39;")})' style="background:none;border:none;color:var(--teal);font-size:12px;font-weight:600;flex-shrink:0;">✏ Compléter</button>
-              </div>
-            `).join("")}
-        </div>
-      </div>
-      <div style="margin-bottom:20px;">
-        <h2 class="font-display" style="font-size:13px;color:var(--muted);margin:0 0 8px;">Activités de l'église</h2>
-        <button class="btn-teal" style="width:100%;margin-bottom:12px;" onclick="openNewActivity()">+ Ajouter une activité</button>
-        <div class="glass" style="overflow:hidden;">
-          ${state.activities.length===0 ? `<p style="padding:16px;color:var(--muted);font-size:14px;margin:0;">Aucune activité enregistrée.</p>` :
-            state.activities.map(a=>`
-              <div class="ledger-row" style="padding:12px 16px;">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
-                  <div style="min-width:0;">
-                    <p style="font-size:14px;font-weight:600;margin:0;">${esc(a.title)}</p>
-                    ${a.activity_date?`<p style="font-size:11px;color:var(--muted2);margin:2px 0 0;">${esc(a.activity_date)}</p>`:""}
-                    ${a.description?`<p style="font-size:13px;color:var(--muted);margin:4px 0 0;">${esc(a.description)}</p>`:""}
-                  </div>
-                  <div style="display:flex;gap:10px;flex-shrink:0;">
-                    <button onclick='openEditActivity(${JSON.stringify(a).replace(/'/g,"&#39;")})' style="background:none;border:none;color:var(--teal);font-size:12px;font-weight:600;">✏</button>
-                    ${state.confirmDelete?.type==="activity" && state.confirmDelete.id===a.id ?
-                      `<span style="display:flex;gap:6px;font-size:12px;"><button onclick="handleDeleteActivity('${a.id}')" style="background:none;border:none;color:var(--coral);font-weight:600;">Oui</button><button onclick="state.confirmDelete=null;render();" style="background:none;border:none;color:var(--muted);">Non</button></span>` :
-                      `<button onclick="state.confirmDelete={type:'activity',id:'${a.id}'};render();" style="background:none;border:none;color:var(--coral);font-size:12px;">🗑</button>`}
-                  </div>
-                </div>
               </div>
             `).join("")}
         </div>
@@ -1160,6 +1177,7 @@ function renderMain(){
         🔔 ${unseen>0?`<span style="position:absolute;top:6px;right:32%;width:8px;height:8px;border-radius:50%;background:var(--coral)"></span>`:""}<span>Journal</span>
       </button>
       <button class="${state.tab==='rubriques'?'active':''}" onclick="state.tab='rubriques';state.selectedDept=null;render();">👥<span>Rubriques</span></button>
+      <button class="${state.tab==='activites'?'active':''}" onclick="openTab('activites')">📅<span>Activités</span></button>
       <button class="${state.tab==='admin'?'active':''}" onclick="openTab('admin')">🛡️<span>Admin</span></button>
     </nav>
 
@@ -1622,8 +1640,17 @@ function renderActivityModal(){
             <button onclick="closeActivityPanel()" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
           </div>
           <div style="display:flex;flex-direction:column;gap:12px;">
-            <div><label class="label">Titre *</label><input id="act-title" value="${esc(f.title)}" placeholder="Ex : Mariage, Semaine spirituelle..." /></div>
-            <div><label class="label">Date</label><input id="act-date" type="date" value="${esc(f.date)}" /></div>
+            <div><label class="label">Type d'activité</label>
+              <select id="act-cat" style="color:var(--text);background:var(--inputbg);border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:14px;width:100%;font-family:inherit;">
+                ${ACT_TYPES.map(t=>`<option value="${t.v}" ${f.category===t.v?"selected":""}>${t.icon} ${t.label}</option>`).join("")}
+              </select>
+            </div>
+            <div><label class="label">Titre *</label><input id="act-title" value="${esc(f.title)}" placeholder="Ex : Mariage de Jean et Marie, Baptême d'eau..." /></div>
+            <div style="display:flex;gap:10px;">
+              <div style="flex:1;"><label class="label">Date</label><input id="act-date" type="date" value="${esc(f.date)}" /></div>
+              <div style="flex:1;"><label class="label">Heure</label><input id="act-time" type="time" value="${esc(f.time)}" /></div>
+            </div>
+            <div><label class="label">Lieu</label><input id="act-place" value="${esc(f.place)}" placeholder="Ex : Temple, bord de mer, salle..." /></div>
             <div><label class="label">Description</label><textarea id="act-desc" rows="3" placeholder="Détails (facultatif)...">${esc(f.description)}</textarea></div>
           </div>
         </div>
@@ -1631,6 +1658,65 @@ function renderActivityModal(){
       </div>
     </div>
   `;
+}
+
+function renderActivityCard(a, past){
+  const t = actType(a.category);
+  const n = daysUntil(a.activity_date);
+  const when = a.activity_date ? fmtLongDate(a.activity_date) + (a.activity_time ? " · " + fmtTime(a.activity_time) : "") : "Date à préciser";
+  const badge = n!==null && !past ? `<span style="font-size:11px;font-weight:700;color:#16112A;background:linear-gradient(135deg,var(--gold),var(--gold2));border-radius:99px;padding:2px 9px;">${relDays(n)}</span>` : "";
+  const confirming = state.confirmDelete?.type==="activity" && state.confirmDelete.id===a.id;
+  return `<div class="glass" style="padding:14px;margin-bottom:10px;border-left:4px solid ${t.color};">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+      <div style="min-width:0;flex:1;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;"><span style="font-size:12px;font-weight:700;color:var(--muted);">${t.icon} ${esc(t.label)}</span>${badge}</div>
+        <p style="font-size:15px;font-weight:700;margin:0;">${esc(a.title)}</p>
+        <p style="font-size:12px;color:var(--muted);margin:4px 0 0;">📅 ${esc(when)}${past && n!==null ? " · " + relDays(n).toLowerCase() : ""}</p>
+        ${a.location?`<p style="font-size:12px;color:var(--muted);margin:2px 0 0;">📍 ${esc(a.location)}</p>`:""}
+        ${a.description?`<p style="font-size:13px;color:var(--muted);margin:6px 0 0;white-space:pre-wrap;">${esc(a.description)}</p>`:""}
+      </div>
+      <div style="display:flex;gap:10px;flex-shrink:0;align-items:center;">
+        <button onclick='openEditActivity(${JSON.stringify(a).replace(/'/g,"&#39;")})' style="background:none;border:none;color:var(--teal);font-size:15px;">✏</button>
+        ${confirming ?
+          `<span style="display:flex;gap:6px;font-size:12px;"><button onclick="handleDeleteActivity('${a.id}')" style="background:none;border:none;color:var(--coral);font-weight:600;">Oui</button><button onclick="state.confirmDelete=null;render();" style="background:none;border:none;color:var(--muted);">Non</button></span>` :
+          `<button onclick="state.confirmDelete={type:'activity',id:'${a.id}'};render();" style="background:none;border:none;color:var(--coral);font-size:15px;">🗑</button>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderActivitesTab(){
+  const all = state.activities.slice();
+  const list = state.actFilter==="all" ? all : all.filter(a=>(a.category||"autre")===state.actFilter);
+  const dated = x => x.activity_date;
+  const upcoming = list.filter(a=>dated(a) && daysUntil(a.activity_date)>=0).sort((a,b)=>a.activity_date.localeCompare(b.activity_date) || (a.activity_time||"").localeCompare(b.activity_time||""));
+  const past = list.filter(a=>dated(a) && daysUntil(a.activity_date)<0).sort((a,b)=>b.activity_date.localeCompare(a.activity_date));
+  const undated = list.filter(a=>!dated(a));
+  const now = new Date(), ym = now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
+  const thisMonth = list.filter(a=>dated(a) && a.activity_date.startsWith(ym)).length;
+  const next = upcoming[0];
+  const stat = (label,val,extra) => `<div class="glass" style="flex:1;padding:10px 12px;min-width:0;"><div style="font-size:11px;color:var(--muted);">${label}</div><div class="font-display" style="font-size:22px;margin-top:2px;">${val}</div>${extra||""}</div>`;
+  const nextCard = next
+    ? stat("Prochaine", relDays(daysUntil(next.activity_date)), `<div style="font-size:11px;color:var(--muted2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${actType(next.category).icon} ${esc(next.title)}</div>`)
+    : stat("Prochaine", "—", `<div style="font-size:11px;color:var(--muted2);margin-top:2px;">aucune prévue</div>`);
+  const top = `<div style="display:flex;gap:8px;margin-bottom:14px;">${stat("À venir", upcoming.length)}${stat("Ce mois-ci", thisMonth)}${nextCard}</div>`;
+  const chip = (v,label,icon) => {
+    const on = state.actFilter===v;
+    return `<button onclick="setActFilter('${v}')" style="flex-shrink:0;border:none;border-radius:999px;padding:8px 13px;font-size:12px;font-weight:700;${on?"background:linear-gradient(135deg,var(--gold),var(--gold2));color:#16112A;":"background:var(--inputbg);color:var(--muted);"}">${icon?icon+" ":""}${esc(label)}</button>`;
+  };
+  const chips = `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;">${chip("all","Toutes","")}${ACT_TYPES.map(t=>chip(t.v,t.chip,t.icon)).join("")}</div>`;
+  const heading = t => `<h2 class="font-display" style="font-size:13px;color:var(--muted);margin:16px 0 8px;">${t}</h2>`;
+  let out = `<button class="btn-teal" style="width:100%;margin-bottom:14px;" onclick="openNewActivity()">+ Ajouter une activité</button>` + top + chips;
+  if(all.length===0) return out + `<div class="glass" style="padding:24px;text-align:center;"><p class="font-display" style="font-size:16px;margin:0 0 4px;">Aucune activité enregistrée</p><p style="font-size:13px;color:var(--muted);margin:0;">Ajoute un mariage, un baptême, une retraite, une veillée de prière ou un programme spécial.</p></div>`;
+  if(list.length===0) return out + `<div class="glass" style="padding:20px;text-align:center;"><p style="font-size:13px;color:var(--muted);margin:0;">Aucune activité de ce type.</p></div>`;
+  if(upcoming.length>0) out += heading(`À venir (${upcoming.length})`) + upcoming.map(a=>renderActivityCard(a,false)).join("");
+  if(undated.length>0) out += heading(`Sans date (${undated.length})`) + undated.map(a=>renderActivityCard(a,false)).join("");
+  if(past.length>0){
+    const shown = state.actShowPast ? past : past.slice(0,6);
+    out += heading(`Passées (${past.length})`) + shown.map(a=>renderActivityCard(a,true)).join("");
+    if(past.length>6) out += `<button onclick="toggleActPast()" style="width:100%;background:none;border:none;padding:10px;font-size:13px;font-weight:600;color:#8B6A00;">${state.actShowPast?"Réduire la liste":`Voir toutes les activités passées (${past.length})`}</button>`;
+  }
+  return out;
 }
 
 function renderDeptModal(){
