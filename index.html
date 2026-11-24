@@ -310,6 +310,7 @@ const state = {
   actShowPast: false,
   actView: "list",
   actYear: "auto",
+  bilanClosed: {},
   activityTypes: [],
   activityTypesReady: false,
   typesPanel: false,
@@ -2070,6 +2071,131 @@ function renderActivityStats(){
   return chips + cards + chart + split + months + detail;
 }
 
+// ---------------- BILAN ANNUEL DES ACTIVITÉS ----------------
+function fmtShortDateFr(dateStr){
+  const m = String(dateStr||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return "";
+  return new Date(+m[1],+m[2]-1,+m[3]).toLocaleDateString("fr-FR",{ weekday:"short", day:"2-digit", month:"2-digit", year:"numeric" });
+}
+function resolveActYear(){
+  const years = actYears();
+  const thisYear = String(new Date().getFullYear());
+  let yr = state.actYear;
+  if(yr === "auto") yr = years.includes(thisYear) ? thisYear : (years[0] || "all");
+  return yr;
+}
+function groupByType(list){
+  const map = new Map();
+  list.forEach(a=>{
+    const t = actType(actCat(a));
+    const key = personKey(t.name);
+    if(!map.has(key)) map.set(key, { key, name:t.name, label:t.label, icon:t.icon, color:t.color, count:0, items:[] });
+    const g = map.get(key); g.count++; g.items.push(a);
+  });
+  map.forEach(g=>g.items.sort((x,y)=>(x.activity_date||"9999").localeCompare(y.activity_date||"9999") || (x.activity_time||"").localeCompare(y.activity_time||"")));
+  return Array.from(map.values()).sort((x,y)=>y.count-x.count || x.label.localeCompare(y.label,"fr"));
+}
+function bilanData(){
+  const yr = resolveActYear();
+  const sel = yr==="all" ? state.activities.slice() : state.activities.filter(a=>String(a.activity_date||"").startsWith(yr+"-"));
+  const groups = groupByType(sel);
+  const upcoming = sel.filter(a=>a.activity_date && daysUntil(a.activity_date)>0).length;
+  const done = sel.filter(a=>a.activity_date && daysUntil(a.activity_date)<=0).length;
+  let prevYr = null, prevGroups = [], prevTotal = 0;
+  if(yr !== "all"){
+    prevYr = String(+yr - 1);
+    const prev = state.activities.filter(a=>String(a.activity_date||"").startsWith(prevYr+"-"));
+    prevTotal = prev.length; prevGroups = groupByType(prev);
+  }
+  // lignes de comparaison (types de l'année + types présents seulement l'année précédente)
+  const prevMap = new Map(prevGroups.map(g=>[g.key,g]));
+  const rows = groups.map(g=>({ key:g.key, label:g.label, icon:g.icon, cur:g.count, prev:prevMap.has(g.key)?prevMap.get(g.key).count:0 }));
+  prevGroups.forEach(g=>{ if(!groups.some(x=>x.key===g.key)) rows.push({ key:g.key, label:g.label, icon:g.icon, cur:0, prev:g.count }); });
+  return { yr, sel, groups, total:sel.length, upcoming, done, prevYr, prevTotal, rows };
+}
+function varText(cur, prev){ const d = cur - prev; return d>0 ? "▲ +" + d : d<0 ? "▼ " + d : "="; }
+function toggleBilanType(key){ state.bilanClosed[key] = !state.bilanClosed[key]; render(); }
+function renderActivityBilan(){
+  const d = bilanData();
+  const years = actYears();
+  const chip = (v,label) => `<button onclick="setActYear('${v}')" style="flex-shrink:0;border:none;border-radius:999px;padding:8px 14px;font-size:12px;font-weight:700;${d.yr===v?"background:linear-gradient(135deg,var(--gold),var(--gold2));color:#16112A;":"background:var(--inputbg);color:var(--muted);"}">${label}</button>`;
+  const chips = `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;">${chip("all","Toutes les années")}${years.map(y=>chip(y,y)).join("")}</div>`;
+  if(d.total === 0) return chips + `<div class="glass" style="padding:20px;text-align:center;"><p style="font-size:14px;color:var(--muted);margin:0;">Aucune activité ${d.yr==="all"?"enregistrée":"en "+d.yr}.</p></div>`;
+  const sub = t => `<div style="font-size:11px;color:var(--muted2);margin-top:2px;">${t}</div>`;
+  const stat = (label,val,extra) => `<div class="glass" style="flex:1;padding:10px 12px;min-width:0;"><div style="font-size:11px;color:var(--muted);">${label}</div><div class="font-display" style="font-size:22px;margin-top:2px;">${val}</div>${extra}</div>`;
+  const title = d.yr==="all" ? "Bilan — toutes les années" : "Bilan " + d.yr;
+  const head = `<div class="glass" style="padding:14px;margin-bottom:12px;"><div class="font-display" style="font-size:16px;margin-bottom:2px;">📘 ${esc(title)}</div><div style="font-size:12px;color:var(--muted);">Temple des Vainqueurs · San Pédro</div></div>`;
+  const cards = `<div style="display:flex;gap:8px;margin-bottom:12px;">${stat("Activités", d.total, sub(d.groups.length + " type" + (d.groups.length>1?"s":"")))}${stat("Réalisées", d.done, sub("déjà passées"))}${stat("À venir", d.upcoming, sub("programmées"))}</div>`;
+  const exp = `<div style="display:flex;gap:8px;margin-bottom:14px;"><button class="glass" style="flex:1;padding:12px;font-size:13px;font-weight:700;border:none;" onclick="exportBilanExcel()">📊 Exporter Excel</button><button class="glass" style="flex:1;padding:12px;font-size:13px;font-weight:700;border:none;" onclick="exportBilanPDF()">📄 Exporter PDF</button></div>`;
+
+  let cmp = "";
+  if(d.yr !== "all" && d.prevTotal > 0){
+    const color = v => v>0 ? "var(--teal)" : v<0 ? "var(--coral)" : "var(--muted2)";
+    const body = d.rows.map(r=>`<div class="ledger-row" style="display:flex;align-items:center;gap:8px;padding:10px 14px;"><span style="flex:1;font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.icon)} ${esc(r.label)}</span><span style="font-size:12px;color:var(--muted);min-width:34px;text-align:right;">${r.prev}</span><span style="font-size:13px;font-weight:700;min-width:34px;text-align:right;">${r.cur}</span><span style="font-size:12px;font-weight:700;min-width:54px;text-align:right;color:${color(r.cur-r.prev)};">${varText(r.cur,r.prev)}</span></div>`).join("");
+    cmp = `<div class="glass" style="overflow:hidden;margin-bottom:14px;"><div class="font-display" style="font-size:14px;padding:14px 14px 4px;">Comparaison avec ${d.prevYr}</div><div style="display:flex;gap:8px;padding:4px 14px;font-size:11px;color:var(--muted2);"><span style="flex:1;">Type</span><span style="min-width:34px;text-align:right;">${d.prevYr}</span><span style="min-width:34px;text-align:right;">${d.yr}</span><span style="min-width:54px;text-align:right;">Écart</span></div>${body}<div class="ledger-row" style="display:flex;gap:8px;padding:10px 14px;font-weight:700;"><span style="flex:1;font-size:13px;">Total</span><span style="font-size:12px;color:var(--muted);min-width:34px;text-align:right;">${d.prevTotal}</span><span style="font-size:13px;min-width:34px;text-align:right;">${d.total}</span><span style="font-size:12px;min-width:54px;text-align:right;color:${color(d.total-d.prevTotal)};">${varText(d.total,d.prevTotal)}</span></div></div>`;
+  }
+
+  const prevMap = new Map(d.rows.map(r=>[r.key,r]));
+  const sections = d.groups.map(g=>{
+    const closed = !!state.bilanClosed[g.key];
+    const pct = Math.round(g.count/d.total*100);
+    const r = prevMap.get(g.key);
+    const delta = (d.yr!=="all" && d.prevTotal>0 && r) ? `<span style="font-size:11px;font-weight:700;color:${r.cur-r.prev>0?"var(--teal)":r.cur-r.prev<0?"var(--coral)":"var(--muted2)"};">${varText(r.cur,r.prev)}</span>` : "";
+    const items = g.items.map(a=>{
+      const up = a.activity_date && daysUntil(a.activity_date) > 0;
+      return `<div class="ledger-row" style="display:flex;gap:10px;align-items:flex-start;padding:10px 14px;"><span style="min-width:98px;font-size:12px;color:var(--muted);">${a.activity_date ? esc(fmtShortDateFr(a.activity_date)) : "Sans date"}</span><div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;">${esc(a.title)}</div>${(a.activity_time||a.location)?`<div style="font-size:11px;color:var(--muted2);margin-top:2px;">${a.activity_time?esc(fmtTime(a.activity_time)):""}${a.activity_time&&a.location?" · ":""}${a.location?"📍 "+esc(a.location):""}</div>`:""}</div>${up?`<span style="font-size:10px;font-weight:700;color:#16112A;background:linear-gradient(135deg,var(--gold),var(--gold2));border-radius:99px;padding:2px 8px;flex-shrink:0;">à venir</span>`:""}</div>`;
+    }).join("");
+    return `<div class="glass" style="margin-bottom:10px;overflow:hidden;border-left:4px solid ${g.color};"><button onclick='toggleBilanType(${attrJs(g.key)})' style="width:100%;display:flex;align-items:center;gap:10px;padding:12px 14px;background:none;border:none;text-align:left;"><span style="font-size:20px;">${esc(g.icon)}</span><div style="flex:1;min-width:0;"><div style="font-size:14px;font-weight:700;">${esc(g.label)}</div><div style="font-size:11px;color:var(--muted2);">${g.count} activité${g.count>1?"s":""} · ${pct} % ${delta?"· "+delta:""}</div></div><span style="color:var(--muted2);font-size:16px;">${closed?"▸":"▾"}</span></button>${closed ? "" : items}</div>`;
+  }).join("");
+  return chips + head + cards + exp + cmp + `<h2 class="font-display" style="font-size:13px;color:var(--muted);margin:4px 0 8px;">Historique par type</h2>` + sections;
+}
+function exportBilanExcel(){
+  const d = bilanData();
+  if(d.total === 0){ alert("Aucune activité à exporter."); return; }
+  const hasPrev = d.yr !== "all" && d.prevTotal > 0;
+  const sum = [hasPrev ? ["Type","Nombre","% du total", d.prevYr, "Écart"] : ["Type","Nombre","% du total"]];
+  d.rows.filter(r=>r.cur>0 || hasPrev).forEach(r=>{
+    const line = [r.label, r.cur, Math.round(r.cur/d.total*100) + " %"];
+    if(hasPrev){ line.push(r.prev, varText(r.cur,r.prev)); }
+    sum.push(line);
+  });
+  const totalLine = ["Total", d.total, "100 %"];
+  if(hasPrev){ totalLine.push(d.prevTotal, varText(d.total,d.prevTotal)); }
+  sum.push(totalLine);
+  const detail = [["Date","Type","Titre","Heure","Lieu","Description","Statut"]];
+  d.sel.slice().sort((a,b)=>(a.activity_date||"9999").localeCompare(b.activity_date||"9999") || (a.activity_time||"").localeCompare(b.activity_time||""))
+    .forEach(a=>detail.push([ a.activity_date ? fmtDateFr(a.activity_date) : "", actType(actCat(a)).label, a.title||"", a.activity_time ? fmtTime(a.activity_time) : "", a.location||"", a.description||"", a.activity_date && daysUntil(a.activity_date)>0 ? "À venir" : a.activity_date ? "Réalisée" : "" ]));
+  const name = "bilan-activites-" + (d.yr==="all" ? "toutes-annees" : d.yr) + ".xlsx";
+  downloadBlob(buildXlsx([{ name: d.yr==="all" ? "Résumé" : "Résumé " + d.yr, rows: sum }, { name: "Historique", rows: detail }]), name);
+}
+function exportBilanPDF(){
+  const d = bilanData();
+  if(d.total === 0){ alert("Aucune activité à exporter."); return; }
+  const w = window.open("", "_blank");
+  if(!w){ alert("Le navigateur a bloqué l'ouverture. Autorise les fenêtres pop-up pour ce site, puis réessaie."); return; }
+  const hasPrev = d.yr !== "all" && d.prevTotal > 0;
+  const dateTxt = new Date().toLocaleDateString("fr-FR",{day:"numeric",month:"long",year:"numeric"});
+  const sumRows = d.rows.filter(r=>r.cur>0 || hasPrev).map(r=>`<tr><td>${esc(r.icon)} ${esc(r.label)}</td><td>${r.cur}</td><td>${Math.round(r.cur/d.total*100)} %</td>${hasPrev?`<td>${r.prev}</td><td>${esc(varText(r.cur,r.prev))}</td>`:""}</tr>`).join("");
+  const sumTable = `<table><thead><tr><th>Type</th><th>Nombre</th><th>% du total</th>${hasPrev?`<th>${d.prevYr}</th><th>Écart</th>`:""}</tr></thead><tbody>${sumRows}<tr class="tot"><td>Total</td><td>${d.total}</td><td>100 %</td>${hasPrev?`<td>${d.prevTotal}</td><td>${esc(varText(d.total,d.prevTotal))}</td>`:""}</tr></tbody></table>`;
+  const sections = d.groups.map(g=>`<h2>${esc(g.icon)} ${esc(g.label)} — ${g.count}</h2><table><thead><tr><th>Date</th><th>Titre</th><th>Heure</th><th>Lieu</th></tr></thead><tbody>${g.items.map(a=>`<tr><td>${a.activity_date?esc(fmtShortDateFr(a.activity_date)):"Sans date"}</td><td>${esc(a.title)}</td><td>${a.activity_time?esc(fmtTime(a.activity_time)):""}</td><td>${esc(a.location||"")}</td></tr>`).join("")}</tbody></table>`).join("");
+  w.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bilan des activités ${d.yr==="all"?"":d.yr}</title><style>
+    body{font-family:Arial,Helvetica,sans-serif;color:#1d1633;margin:24px;}
+    h1{font-size:20px;margin:0 0 4px;} h2{font-size:15px;margin:22px 0 6px;} .sub{font-size:13px;color:#555;margin:0 0 16px;}
+    table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:6px;}
+    th{background:#F2B705;color:#16112A;text-align:left;padding:7px 8px;border:1px solid #d9a800;}
+    td{padding:6px 8px;border:1px solid #ddd;} tr:nth-child(even) td{background:#faf7ee;} tr.tot td{font-weight:bold;background:#f2ecd6;}
+    .bar{margin-bottom:16px;} button{background:#F2B705;border:none;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:bold;}
+    h2,table{page-break-inside:avoid;} @media print{.bar{display:none;} body{margin:10mm;}}
+  </style></head><body>
+    <div class="bar"><button onclick="window.print()">🖨 Imprimer / Enregistrer en PDF</button></div>
+    <h1>Temple des Vainqueurs — San Pédro</h1>
+    <p class="sub">Bilan des activités ${d.yr==="all"?"(toutes les années)":"· "+d.yr} · ${d.total} activité${d.total>1?"s":""} · édité le ${esc(dateTxt)}</p>
+    ${sumTable}${sections}
+  </body></html>`);
+  w.document.close();
+  setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} }, 500);
+}
+
 function renderActivityCard(a, past){
   const t = actType(a.category);
   const n = daysUntil(a.activity_date);
@@ -2120,8 +2246,9 @@ function renderActivitesTab(){
   const heading = t => `<h2 class="font-display" style="font-size:13px;color:var(--muted);margin:16px 0 8px;">${t}</h2>`;
   const head = `<div style="display:flex;gap:8px;margin-bottom:12px;"><button class="btn-teal" style="flex:1;" onclick="openNewActivity()">+ Ajouter une activité</button><button onclick="openTypesPanel()" style="background:var(--inputbg);border:none;border-radius:16px;padding:0 16px;font-size:13px;font-weight:700;color:var(--muted);">⚙️ Types</button></div>`;
   const seg = (v,label) => `<button onclick="setActView('${v}')" style="flex:1;border:none;border-radius:12px;padding:10px;font-size:13px;font-weight:700;${state.actView===v?"background:#fff;color:#16112A;box-shadow:0 2px 8px rgba(43,30,90,0.12);":"background:transparent;color:var(--muted);"}">${label}</button>`;
-  const toggle = `<div style="display:flex;gap:4px;background:var(--inputbg);border-radius:14px;padding:4px;margin-bottom:14px;">${seg("list","📋 Liste")}${seg("stats","📊 Statistiques")}</div>`;
+  const toggle = `<div style="display:flex;gap:4px;background:var(--inputbg);border-radius:14px;padding:4px;margin-bottom:14px;">${seg("list","📋 Liste")}${seg("stats","📊 Stats")}${seg("bilan","📘 Bilan")}</div>`;
   if(state.actView === "stats") return head + toggle + renderActivityStats();
+  if(state.actView === "bilan") return head + toggle + renderActivityBilan();
   let out = head + toggle + top + chips;
   if(all.length===0) return out + `<div class="glass" style="padding:24px;text-align:center;"><p class="font-display" style="font-size:16px;margin:0 0 4px;">Aucune activité enregistrée</p><p style="font-size:13px;color:var(--muted);margin:0;">Ajoute un mariage, un baptême, une retraite, une veillée de prière ou un programme spécial.</p></div>`;
   if(list.length===0) return out + `<div class="glass" style="padding:20px;text-align:center;"><p style="font-size:13px;color:var(--muted);margin:0;">Aucune activité de ce type.</p></div>`;
