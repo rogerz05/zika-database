@@ -154,7 +154,7 @@ function describeChange(path, opts){
       const d = state.departments.find(x=>x.id===body.dept_id);
       return `a ajouté ${q(body.name)}${d ? " à la rubrique " + q(d.name) : ""}`;
     }
-    if(method === "PATCH" && body) return `a modifié la fiche de ${q(body.name)}`;
+    if(method === "PATCH" && body && body.name) return `a modifié la fiche de ${q(body.name)}`;
     if(method === "DELETE" && id){
       const m = state.members.find(x=>String(x.id)===String(id));
       return `a supprimé la fiche de ${q(m ? m.name : "un membre")}`;
@@ -429,11 +429,14 @@ function isPersonDept(deptId){
   if(!dept) return false;
   return PERSON_DEPT_NAMES.includes((dept.name||"").trim().toLowerCase());
 }
+function personKey(name){
+  return String(name||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim().toLowerCase();
+}
 function uniqueMembers(){
   const seen = new Map();
   for(const m of state.members){
     if(!isPersonDept(m.dept_id)) continue;
-    const key = (m.name||"").trim().toLowerCase();
+    const key = personKey(m.name);
     if(!key) continue;
     if(!seen.has(key)){
       seen.set(key, {...m});
@@ -448,6 +451,7 @@ function uniqueMembers(){
 }
 const MARITAL_OPTIONS = [
   { v:"marie",        label:"Marié(e)",        short:"Mariés",        color:"var(--teal)" },
+  { v:"concubin",     label:"Concubin(e)",     short:"Concubins",     color:"#8D6E63" },
   { v:"fiance",       label:"Fiancé(e)",       short:"Fiancés",       color:"var(--violet)" },
   { v:"celibataire",  label:"Célibataire",     short:"Célibataires",  color:"var(--gold)" },
   { v:"divorce",      label:"Divorcé(e)",      short:"Divorcés",      color:"var(--coral)" },
@@ -851,6 +855,14 @@ async function handleSaveMember(){
       await sb(`members?id=eq.${state.editingMemberId}`, { method:"PATCH", body: JSON.stringify({ ...form, updated_by: state.session.name, updated_at: new Date().toISOString() }) });
     } else {
       await sb("members", { method:"POST", body: JSON.stringify([{ ...form, dept_id: state.selectedDept, added_by: state.session.name }]) });
+    }
+    // Même personne dans plusieurs rubriques : la situation matrimoniale reste identique partout
+    if(form.marital_status){
+      const key = personKey(name);
+      const others = state.members.filter(m=> personKey(m.name)===key && String(m.id)!==String(state.editingMemberId) && m.marital_status!==form.marital_status);
+      for(const o of others){
+        await sb(`members?id=eq.${o.id}`, { method:"PATCH", body: JSON.stringify({ marital_status: form.marital_status }) });
+      }
     }
     pendingPhotoFile = null;
     await loadData();
