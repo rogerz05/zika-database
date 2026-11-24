@@ -723,6 +723,40 @@ function fmtTime(t){ const m = String(t||"").match(/^(\d{1,2}):(\d{2})/); return
 function setActFilter(v){ state.actFilter = v; state.actShowPast = false; render(); }
 function toggleActPast(){ state.actShowPast = !state.actShowPast; render(); }
 
+function icsEsc(t){ return String(t||"").replace(/\\/g,"\\\\").replace(/\r?\n/g,"\\n").replace(/,/g,"\\,").replace(/;/g,"\\;"); }
+function addActivityToCalendar(id){
+  const a = state.activities.find(x=>String(x.id)===String(id));
+  if(!a || !a.activity_date){ alert("Cette activité n'a pas de date."); return; }
+  const m = String(a.activity_date).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m){ alert("Date invalide."); return; }
+  const pad = n => String(n).padStart(2,"0");
+  const stamp = new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d{3}/,"");
+  const t = String(a.activity_time||"").match(/^(\d{1,2}):(\d{2})/);
+  const lines = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Registre des membres//FR","CALSCALE:GREGORIAN","METHOD:PUBLISH","BEGIN:VEVENT",
+    "UID:activite-" + a.id + "@registre-membres", "DTSTAMP:" + stamp];
+  if(t){
+    const start = new Date(+m[1], +m[2]-1, +m[3], +t[1], +t[2]);
+    const end = new Date(start.getTime() + 2*3600*1000);
+    const f = d => d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + "T" + pad(d.getHours()) + pad(d.getMinutes()) + "00";
+    lines.push("DTSTART:" + f(start), "DTEND:" + f(end));
+  } else {
+    const day = new Date(+m[1], +m[2]-1, +m[3]), next = new Date(+m[1], +m[2]-1, +m[3]+1);
+    const f = d => d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate());
+    lines.push("DTSTART;VALUE=DATE:" + f(day), "DTEND;VALUE=DATE:" + f(next));
+  }
+  lines.push("SUMMARY:" + icsEsc(actType(a.category).icon + " " + a.title));
+  if(a.location) lines.push("LOCATION:" + icsEsc(a.location));
+  if(a.description) lines.push("DESCRIPTION:" + icsEsc(a.description));
+  const alarm = (trigger, text) => ["BEGIN:VALARM","ACTION:DISPLAY","DESCRIPTION:" + icsEsc(text),"TRIGGER:" + trigger,"END:VALARM"];
+  if(t){
+    lines.push(...alarm("-P1D","Demain : " + a.title), ...alarm("-PT1H","Dans 1 heure : " + a.title), ...alarm("PT0S","Maintenant : " + a.title));
+  } else {
+    lines.push(...alarm("-PT15H","Demain : " + a.title), ...alarm("PT7H","Aujourd'hui : " + a.title));
+  }
+  lines.push("END:VEVENT","END:VCALENDAR");
+  downloadBlob(new Blob([lines.join("\r\n")], { type:"text/calendar;charset=utf-8" }), "activite-" + exportFileName(a.title) + ".ics");
+}
+
 function openNewActivity(){
   state.activityForm = { title:"", date:"", time:"", place:"", category: (state.actFilter!=="all" && state.actFilter!=="__none__") ? state.actFilter : "", description:"" };
   state.activityPanel = "new";
@@ -1709,7 +1743,8 @@ function renderActivityCard(a, past){
         ${a.description?`<p style="font-size:13px;color:var(--muted);margin:6px 0 0;white-space:pre-wrap;">${esc(a.description)}</p>`:""}
       </div>
     </div>
-    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid rgba(43,30,90,0.08);">
+    <div style="display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid rgba(43,30,90,0.08);">
+      ${a.activity_date && !past ? `<button onclick="addActivityToCalendar('${a.id}')" style="background:var(--inputbg);border:none;border-radius:10px;padding:8px 14px;font-size:12px;font-weight:700;color:#8B6A00;">⏰ Rappel</button>` : ""}
       <button onclick="openEditActivityById('${a.id}')" style="background:var(--inputbg);border:none;border-radius:10px;padding:8px 14px;font-size:12px;font-weight:700;color:var(--teal);">✏ Modifier</button>
       ${confirming ?
         `<span style="display:flex;gap:8px;align-items:center;font-size:12px;"><span style="color:var(--muted);">Supprimer ?</span><button onclick="handleDeleteActivity('${a.id}')" style="background:var(--coral);border:none;border-radius:10px;padding:8px 14px;font-size:12px;font-weight:700;color:#fff;">Oui</button><button onclick="state.confirmDelete=null;render();" style="background:var(--inputbg);border:none;border-radius:10px;padding:8px 14px;font-size:12px;font-weight:700;color:var(--muted);">Non</button></span>` :
